@@ -95,7 +95,8 @@ app.post('/api/auth/request-access', async (req, res) => {
   res.status(201).json({ success: true, requestId, message: 'تم إرسال طلبك إلى الإدارة. اطلب من المدير تزويدك برمز الموافقة يدويًا.' });
 });
 app.post('/api/auth/activate', async (req, res) => {
-  const requestId = String(req.body.requestId || '').trim(); const code = String(req.body.approvalCode || '').trim();
+  const requestId = String(req.body.requestId || '').trim(); 
+  const code = String(req.body.approvalCode || '').trim();
   const request = await db.collection('access_requests').findOne({ id: requestId, status: 'pending' });
   if (!request || new Date(request.expires_at) < now() || !(await bcrypt.compare(code, request.code_hash))) return res.status(400).json({ success: false, error: 'INVALID_OR_EXPIRED_APPROVAL_CODE' });
   await db.collection('users').updateOne({ id: request.user_id }, { $set: { status: 'active', approved_at: now(), updated_at: now() } });
@@ -109,7 +110,8 @@ app.get('/api/admin/users', auth(), admin, async (req, res) => {
 app.post('/api/admin/users/:id/issue-code', auth(), admin, async (req, res) => {
   const user = await db.collection('users').findOne({ id: req.params.id, account_id: ACCOUNT_ID });
   if (!user) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
-  const code = String(crypto.randomInt(100000, 999999)); const requestId = id();
+  const code = String(crypto.randomInt(100000, 999999)); 
+  const requestId = id();
   await db.collection('access_requests').updateMany({ user_id: user.id, status: 'pending' }, { $set: { status: 'revoked', revoked_at: now() } });
   await db.collection('access_requests').insertOne({ id: requestId, user_id: user.id, account_id: ACCOUNT_ID, phone: user.phone, full_name: user.full_name, code_hash: await bcrypt.hash(code, 12), status: 'pending', expires_at: new Date(Date.now() + 24*60*60*1000), created_at: now(), issued_by: req.user.id });
   await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'access.code_issued', entity_type: 'user', entity_id: user.id, created_at: now(), created_by: req.user.id });
@@ -128,10 +130,12 @@ app.post('/api/admin/users/:id/revoke-sessions', auth(), admin, async (req, res)
 
 app.get('/api/zoe', async (req, res) => res.json({ success: true, data: await db.collection('customers').find({ account_id: ACCOUNT_ID }).sort({ name: 1 }).limit(500).toArray() }));
 app.post('/api/zoe', async (req, res) => {
-  const name = String(req.body.name || '').trim(); const phone = String(req.body.phone || '').trim();
+  const name = String(req.body.name || '').trim(); 
+  const phone = String(req.body.phone || '').trim();
   if (!name || !phone) return res.status(400).json({ success: false, error: 'NAME_AND_PHONE_REQUIRED' });
   const doc = { id: id(), account_id: ACCOUNT_ID, name, phone, phone_normalized: normPhone(phone), total_delivered: Number(req.body.total_delivered || 0), total_returned: Number(req.body.total_returned || 0), updated_at: now(), created_at: now() };
-  const { created_at, ...customerUpdate } = doc; await db.collection('customers').updateOne({ account_id: ACCOUNT_ID, phone_normalized: doc.phone_normalized }, { $set: customerUpdate, $setOnInsert: { created_at } }, { upsert: true });
+  const { created_at, ...customerUpdate } = doc; 
+  await db.collection('customers').updateOne({ account_id: ACCOUNT_ID, phone_normalized: doc.phone_normalized }, { $set: customerUpdate,$setOnInsert: { created_at } }, { upsert: true });
   res.status(201).json({ success: true, data: doc });
 });
 
@@ -141,7 +145,8 @@ app.put('/api/automation', auth(), admin, async (req, res) => { const data = { .
 
 app.get('/api/sms/messages', async (req, res) => res.json({ success: true, data: await db.collection('sms_messages').find({ account_id: ACCOUNT_ID }).sort({ received_at: -1 }).limit(Number(req.query.limit || 100)).toArray() }));
 app.post('/api/sms/send', auth(), async (req, res) => {
-  const phone = normPhone(req.body.phone); const message = String(req.body.message || '').trim();
+  const phone = normPhone(req.body.phone); 
+  const message = String(req.body.message || '').trim();
   if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
   const row = { id: id(), account_id: ACCOUNT_ID, phone_normalized: phone, body: message, direction: 'outbound', send_status: process.env.SMS_PROVIDER_URL ? 'queued' : 'failed', error_message: process.env.SMS_PROVIDER_URL ? null : 'SMS_PROVIDER_NOT_CONFIGURED', created_at: now() };
   await db.collection('conversation_messages').insertOne(row);
@@ -151,15 +156,19 @@ app.get('/api/conversations/:phone', async (req, res) => res.json({ success: tru
 app.post('/api/conversations', async (req, res) => { const row = { ...req.body, id: id(), account_id: ACCOUNT_ID, phone_normalized: normPhone(req.body.phone || req.body.phone_normalized), created_at: now() }; await db.collection('conversation_messages').insertOne(row); res.status(201).json({ success: true, data: row }); });
 
 app.get('/api/sync/day', async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
-app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
+app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row,$setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
 app.post('/api/chat', auth(false), async (req, res) => { res.json({ success: true, reply: `حياك الله ${req.body.name || ''}، وصلت رسالتك وسنرد عليك قريبًا. مكتب معجم لتسويق الدواجن.`, model: req.body.model || 'local-fallback', fallback: true }); });
 
 app.use(express.static(path.join(__dirname, '../../public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../../public/index.html')));
 
 async function start() {
-  if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI is required');
-  mongo = new MongoClient(process.env.MONGODB_URI); await mongo.connect(); db = mongo.db(DB_NAME); await ensureBaseData();
+  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
+  if (!mongoUri) throw new Error('MONGODB_URI or MONGO_URI is required');
+  mongo = new MongoClient(mongoUri); 
+  await mongo.connect(); 
+  db = mongo.db(DB_NAME); 
+  await ensureBaseData();                                
   app.listen(PORT, '0.0.0.0', () => console.log(`Mojam server listening on ${PORT}`));
 }
 start().catch(err => { console.error(err); process.exit(1); });
