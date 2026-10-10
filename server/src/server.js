@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const express = require('express');
 const path = require('path');
 const crypto = require('crypto');
@@ -11,8 +11,9 @@ const { MongoClient } = require('mongodb');
 
 const PORT = Number(process.env.PORT || 10000);
 const DB_NAME = process.env.MONGODB_DB || 'mojam_office';
+const MONGODB_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-only-change-me';
-const ACCOUNT_ID = 'mojam-main';
+const ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID || 'mojam-main';
 const app = express();
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -49,6 +50,7 @@ function auth(required = true) {
       const payload = jwt.verify(token, JWT_SECRET);
       const session = await db.collection('user_sessions').findOne({ token_hash: hashToken(token), user_id: payload.sub, revoked_at: null });
       const user = await db.collection('users').findOne({ id: payload.sub, account_id: ACCOUNT_ID });
+      if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
       if (!session || !user || user.status !== 'active' || (user.expires_at && new Date(user.expires_at) < now())) return res.status(401).json({ success: false, error: 'SESSION_REVOKED' });
       req.user = user; req.auth = payload;
       await db.collection('user_sessions').updateOne({ id: session.id }, { $set: { last_seen_at: now() } });
@@ -65,9 +67,12 @@ app.get('/api/health', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const code = String(req.body.employeeCode || '').trim();
+  const phone = normPhone(req.body.phone || '');
+  const fullName = String(req.body.fullName || '').trim();
   const password = String(req.body.password || '');
-  const user = await db.collection('users').findOne({ account_id: ACCOUNT_ID, employee_code: code });
-  if (!user || user.status !== 'active' || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({ success: false, error: 'INVALID_LOGIN' });
+  const user = code ? await db.collection('users').findOne({ account_id: ACCOUNT_ID, employee_code: code }) : await db.collection('users').findOne({ account_id: ACCOUNT_ID, phone_normalized: phone, full_name: fullName });
+  if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
+  if (!user || !password || !(await bcrypt.compare(password, user.password_hash)) || user.status !== 'active') return res.status(401).json({ success: false, error: 'INVALID_LOGIN' });
   const token = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
   await db.collection('user_sessions').insertOne({ id: id(), user_id: user.id, account_id: ACCOUNT_ID, token_hash: hashToken(token), device_id: req.body.deviceId || null, created_at: now(), last_seen_at: now(), expires_at: new Date(Date.now() + 30 * 60 * 1000), revoked_at: null });
   await db.collection('users').updateOne({ id: user.id }, { $set: { last_login_at: now(), failed_login_count: 0 } });
@@ -79,7 +84,7 @@ app.get('/api/auth/me', auth(), (req, res) => res.json({ success: true, user: pu
 app.post('/api/auth/request-access', async (req, res) => {
   const full_name = String(req.body.fullName || '').trim();
   const phone = String(req.body.phone || '').trim();
-  const employee_code = String(req.body.employeeCode || '').trim();
+  const employee_code = String(req.body.employeeCode || ('EMP-' + normPhone(phone)).trim()).trim();
   const password = String(req.body.password || '');
   if (!full_name || !phone || !employee_code || password.length < 8) return res.status(400).json({ success: false, error: 'NAME_PHONE_CODE_PASSWORD_REQUIRED' });
   const exists = await db.collection('users').findOne({ account_id: ACCOUNT_ID, employee_code });
@@ -95,8 +100,7 @@ app.post('/api/auth/request-access', async (req, res) => {
   res.status(201).json({ success: true, requestId, message: 'تم إرسال طلبك إلى الإدارة. اطلب من المدير تزويدك برمز الموافقة يدويًا.' });
 });
 app.post('/api/auth/activate', async (req, res) => {
-  const requestId = String(req.body.requestId || '').trim(); 
-  const code = String(req.body.approvalCode || '').trim();
+  const requestId = String(req.body.requestId || '').trim(); const code = String(req.body.approvalCode || '').trim();
   const request = await db.collection('access_requests').findOne({ id: requestId, status: 'pending' });
   if (!request || new Date(request.expires_at) < now() || !(await bcrypt.compare(code, request.code_hash))) return res.status(400).json({ success: false, error: 'INVALID_OR_EXPIRED_APPROVAL_CODE' });
   await db.collection('users').updateOne({ id: request.user_id }, { $set: { status: 'active', approved_at: now(), updated_at: now() } });
@@ -110,14 +114,31 @@ app.get('/api/admin/users', auth(), admin, async (req, res) => {
 app.post('/api/admin/users/:id/issue-code', auth(), admin, async (req, res) => {
   const user = await db.collection('users').findOne({ id: req.params.id, account_id: ACCOUNT_ID });
   if (!user) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
-  const code = String(crypto.randomInt(100000, 999999)); 
-  const requestId = id();
+  const code = String(crypto.randomInt(100000, 999999)); const requestId = id();
   await db.collection('access_requests').updateMany({ user_id: user.id, status: 'pending' }, { $set: { status: 'revoked', revoked_at: now() } });
   await db.collection('access_requests').insertOne({ id: requestId, user_id: user.id, account_id: ACCOUNT_ID, phone: user.phone, full_name: user.full_name, code_hash: await bcrypt.hash(code, 12), status: 'pending', expires_at: new Date(Date.now() + 24*60*60*1000), created_at: now(), issued_by: req.user.id });
   await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'access.code_issued', entity_type: 'user', entity_id: user.id, created_at: now(), created_by: req.user.id });
   res.json({ success: true, requestId, approvalCode: code, note: 'يظهر الرمز مرة واحدة للمدير، أرسله للعامل يدويًا.' });
 });
+app.post('/api/admin/users/:id/reject', auth(), admin, async (req, res) => {
+  const reason = String(req.body.reason || 'تم رفض طلب الانضمام').trim();
+  const result = await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'rejected', rejection_reason: reason, rejected_by: req.user.id, rejected_at: now(), updated_at: now() } });
+  await db.collection('access_requests').updateMany({ user_id: req.params.id, status: 'pending' }, { $set: { status: 'rejected', rejected_at: now(), rejection_reason: reason } });
+  if (!result.matchedCount) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
+  await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.rejected', entity_type: 'user', entity_id: req.params.id, created_at: now(), created_by: req.user.id });
+  res.json({ success: true, message: 'تم رفض طلب المستخدم.' });
+});
 app.post('/api/admin/users/:id/approve', auth(), admin, async (req, res) => { await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', approved_by: req.user.id, approved_at: now(), updated_at: now() } }); res.json({ success: true }); });
+app.put('/api/admin/users/:id/access', auth(), admin, async (req, res) => {
+  const allowedRoles = ['sales','accountant','shipment_receiver','message_operator','report_viewer','admin'];
+  const allowedPermissions = ['invoices.view','invoices.create','invoices.edit','shipments.view','shipments.create','shipments.edit','customers.view','customers.edit','sms.read','sms.generate_reply','sms.send','reports.export'];
+  const role = allowedRoles.includes(req.body.role) ? req.body.role : 'sales';
+  const permissions = Array.isArray(req.body.permissions) ? [...new Set(req.body.permissions.filter(x => allowedPermissions.includes(x)))] : [];
+  const result = await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { roles: [role], permissions, updated_at: now(), access_updated_by: req.user.id } });
+  if (!result.matchedCount) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
+  await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.access_updated', entity_type: 'user', entity_id: req.params.id, after_data: { role, permissions }, created_at: now(), created_by: req.user.id });
+  res.json({ success: true, role, permissions });
+});
 app.post('/api/admin/users/:id/block', auth(), admin, async (req, res) => {
   await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'blocked', blocked_reason: req.body.reason || 'حظر إداري', updated_at: now() } });
   await db.collection('user_sessions').updateMany({ user_id: req.params.id, revoked_at: null }, { $set: { revoked_at: now(), revoke_reason: 'admin_block' } });
@@ -130,12 +151,10 @@ app.post('/api/admin/users/:id/revoke-sessions', auth(), admin, async (req, res)
 
 app.get('/api/zoe', async (req, res) => res.json({ success: true, data: await db.collection('customers').find({ account_id: ACCOUNT_ID }).sort({ name: 1 }).limit(500).toArray() }));
 app.post('/api/zoe', async (req, res) => {
-  const name = String(req.body.name || '').trim(); 
-  const phone = String(req.body.phone || '').trim();
+  const name = String(req.body.name || '').trim(); const phone = String(req.body.phone || '').trim();
   if (!name || !phone) return res.status(400).json({ success: false, error: 'NAME_AND_PHONE_REQUIRED' });
   const doc = { id: id(), account_id: ACCOUNT_ID, name, phone, phone_normalized: normPhone(phone), total_delivered: Number(req.body.total_delivered || 0), total_returned: Number(req.body.total_returned || 0), updated_at: now(), created_at: now() };
-  const { created_at, ...customerUpdate } = doc; 
-  await db.collection('customers').updateOne({ account_id: ACCOUNT_ID, phone_normalized: doc.phone_normalized }, { $set: customerUpdate,$setOnInsert: { created_at } }, { upsert: true });
+  const { created_at, ...customerUpdate } = doc; await db.collection('customers').updateOne({ account_id: ACCOUNT_ID, phone_normalized: doc.phone_normalized }, { $set: customerUpdate, $setOnInsert: { created_at } }, { upsert: true });
   res.status(201).json({ success: true, data: doc });
 });
 
@@ -145,8 +164,7 @@ app.put('/api/automation', auth(), admin, async (req, res) => { const data = { .
 
 app.get('/api/sms/messages', async (req, res) => res.json({ success: true, data: await db.collection('sms_messages').find({ account_id: ACCOUNT_ID }).sort({ received_at: -1 }).limit(Number(req.query.limit || 100)).toArray() }));
 app.post('/api/sms/send', auth(), async (req, res) => {
-  const phone = normPhone(req.body.phone); 
-  const message = String(req.body.message || '').trim();
+  const phone = normPhone(req.body.phone); const message = String(req.body.message || '').trim();
   if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
   const row = { id: id(), account_id: ACCOUNT_ID, phone_normalized: phone, body: message, direction: 'outbound', send_status: process.env.SMS_PROVIDER_URL ? 'queued' : 'failed', error_message: process.env.SMS_PROVIDER_URL ? null : 'SMS_PROVIDER_NOT_CONFIGURED', created_at: now() };
   await db.collection('conversation_messages').insertOne(row);
@@ -156,19 +174,21 @@ app.get('/api/conversations/:phone', async (req, res) => res.json({ success: tru
 app.post('/api/conversations', async (req, res) => { const row = { ...req.body, id: id(), account_id: ACCOUNT_ID, phone_normalized: normPhone(req.body.phone || req.body.phone_normalized), created_at: now() }; await db.collection('conversation_messages').insertOne(row); res.status(201).json({ success: true, data: row }); });
 
 app.get('/api/sync/day', async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
-app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row,$setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
+app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
 app.post('/api/chat', auth(false), async (req, res) => { res.json({ success: true, reply: `حياك الله ${req.body.name || ''}، وصلت رسالتك وسنرد عليك قريبًا. مكتب معجم لتسويق الدواجن.`, model: req.body.model || 'local-fallback', fallback: true }); });
 
+app.get('/api/admin/overview', auth(), admin, async (req, res) => {
+  const names = ['users','access_requests','customers','suppliers','shipment_cards','invoices','sms_messages','audit_logs'];
+  const counts = {}; for (const name of names) counts[name] = await db.collection(name).countDocuments({ account_id: ACCOUNT_ID });
+  res.json({ success: true, accountId: ACCOUNT_ID, database: DB_NAME, counts, generatedAt: now() });
+});
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, '../../public/admin.html')));
 app.use(express.static(path.join(__dirname, '../../public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../../public/index.html')));
 
 async function start() {
-  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
-  if (!mongoUri) throw new Error('MONGODB_URI or MONGO_URI is required');
-  mongo = new MongoClient(mongoUri); 
-  await mongo.connect(); 
-  db = mongo.db(DB_NAME); 
-  await ensureBaseData();                                
+  if (!MONGODB_URI) throw new Error('MONGODB_URI or MONGO_URI is required');
+  mongo = new MongoClient(MONGODB_URI); await mongo.connect(); db = mongo.db(DB_NAME); await ensureBaseData();
   app.listen(PORT, '0.0.0.0', () => console.log(`Mojam server listening on ${PORT}`));
 }
 start().catch(err => { console.error(err); process.exit(1); });
