@@ -8,12 +8,14 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { MongoClient } = require('mongodb');
+const { GEMINI_MODEL_ID, GeminiApiError, generateGeminiReply } = require('./gemini');
 
 const PORT = Number(process.env.PORT || 10000);
 const DB_NAME = process.env.MONGODB_DB || 'mojam_office';
 const MONGODB_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-only-change-me';
 const ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID || 'mojam-main';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const app = express();
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -107,6 +109,20 @@ app.post('/api/auth/activate', async (req, res) => {
   await db.collection('access_requests').updateOne({ id: requestId }, { $set: { status: 'approved', approved_at: now() } });
   res.json({ success: true, message: 'تم تفعيل الحساب. يمكنك تسجيل الدخول الآن.' });
 });
+app.get('/api/auth/request-status', async (req, res) => {
+  const requestId = String(req.query.requestId || '').trim();
+  if (!requestId) return res.status(400).json({ success: false, error: 'REQUEST_ID_REQUIRED' });
+  const request = await db.collection('access_requests').findOne({ id: requestId, account_id: ACCOUNT_ID });
+  if (!request) return res.status(404).json({ success: false, error: 'REQUEST_NOT_FOUND' });
+  const user = await db.collection('users').findOne({ id: request.user_id, account_id: ACCOUNT_ID }, { projection: { status: 1 } });
+  if (!user) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
+  let status = 'pending';
+  if (['blocked', 'left_company', 'rejected'].includes(user.status)) status = 'rejected';
+  else if (user.status === 'active') status = 'approved';
+  else if (['rejected', 'revoked'].includes(request.status)) status = 'rejected';
+  else if (request.status === 'approved') status = 'approved';
+  res.json({ success: true, status });
+});
 app.get('/api/admin/users', auth(), admin, async (req, res) => {
   const users = await db.collection('users').find({ account_id: ACCOUNT_ID }).project({ password_hash: 0 }).sort({ created_at: -1 }).toArray();
   res.json({ success: true, data: users });
@@ -128,7 +144,14 @@ app.post('/api/admin/users/:id/reject', auth(), admin, async (req, res) => {
   await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.rejected', entity_type: 'user', entity_id: req.params.id, created_at: now(), created_by: req.user.id });
   res.json({ success: true, message: 'تم رفض طلب المستخدم.' });
 });
-app.post('/api/admin/users/:id/approve', auth(), admin, async (req, res) => { await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', approved_by: req.user.id, approved_at: now(), updated_at: now() } }); res.json({ success: true }); });
+app.post('/api/admin/users/:id/approve', auth(), admin, async (req, res) => {
+  const approvedAt = now();
+  const result = await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', approved_by: req.user.id, approved_at: approvedAt, updated_at: approvedAt } });
+  if (!result.matchedCount) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
+  await db.collection('access_requests').updateMany({ user_id: req.params.id, account_id: ACCOUNT_ID, status: 'pending' }, { $set: { status: 'approved', approved_by: req.user.id, approved_at: approvedAt } });
+  await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.approved', entity_type: 'user', entity_id: req.params.id, created_at: approvedAt, created_by: req.user.id });
+  res.json({ success: true, status: 'approved' });
+});
 app.put('/api/admin/users/:id/access', auth(), admin, async (req, res) => {
   const allowedRoles = ['sales','accountant','shipment_receiver','message_operator','report_viewer','admin'];
   const allowedPermissions = ['invoices.view','invoices.create','invoices.edit','shipments.view','shipments.create','shipments.edit','customers.view','customers.edit','sms.read','sms.generate_reply','sms.send','reports.export'];
@@ -158,7 +181,10 @@ app.post('/api/zoe', async (req, res) => {
   res.status(201).json({ success: true, data: doc });
 });
 
-app.get('/api/ai/models', async (req, res) => res.json({ success: true, data: await db.collection('ai_models').find({ account_id: ACCOUNT_ID, active: true }).toArray() }));
+app.get('/api/ai/models', (req, res) => {
+  const models = [{ id: GEMINI_MODEL_ID, name: 'Gemini 3.5 Flash Lite', provider: 'Google Gemini', active: true }];
+  res.json({ success: true, models, data: models, configured: Boolean(GEMINI_API_KEY) });
+});
 app.get('/api/automation', async (req, res) => res.json({ success: true, data: await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID }) || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true } }));
 app.put('/api/automation', auth(), admin, async (req, res) => { const data = { ...req.body, account_id: ACCOUNT_ID, updated_at: now() }; await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true }); res.json({ success: true, data }); });
 
@@ -175,7 +201,42 @@ app.post('/api/conversations', async (req, res) => { const row = { ...req.body, 
 
 app.get('/api/sync/day', async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
 app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
-app.post('/api/chat', auth(false), async (req, res) => { res.json({ success: true, reply: `حياك الله ${req.body.name || ''}، وصلت رسالتك وسنرد عليك قريبًا. مكتب معجم لتسويق الدواجن.`, model: req.body.model || 'local-fallback', fallback: true }); });
+app.post('/api/chat', auth(), async (req, res) => {
+  const message = String(req.body.message || '').trim();
+  if (!message) return res.status(400).json({ success: false, error: 'MESSAGE_REQUIRED', message: 'اكتب رسالة العميل أولاً.' });
+  if (message.length > 5000) return res.status(413).json({ success: false, error: 'MESSAGE_TOO_LONG', message: 'الرسالة أطول من الحد المسموح به.' });
+  if (req.body.model && req.body.model !== GEMINI_MODEL_ID) {
+    return res.status(400).json({ success: false, error: 'UNSUPPORTED_MODEL', message: 'النموذج المعتمد هو زوع — Gemini 3.5 Flash Lite.' });
+  }
+  if (!GEMINI_API_KEY) {
+    return res.status(503).json({ success: false, error: 'AI_PROVIDER_NOT_CONFIGURED', message: 'لم يُضف مفتاح Gemini إلى متغيرات الخادم بعد. أضف GEMINI_API_KEY في Render ثم أعد النشر.' });
+  }
+  try {
+    const generated = await generateGeminiReply({
+      message,
+      name: req.body.name,
+      dialect: req.body.dialect,
+      responseFormat: req.body.responseFormat,
+      responseRules: req.body.responseRules,
+      responseNumbers: req.body.responseNumbers,
+      remainingDebt: req.body.remainingDebt ?? req.body.debt,
+      deliveredCrates: req.body.deliveredCrates ?? req.body.boxes
+    }, { apiKey: GEMINI_API_KEY });
+    return res.json({ success: true, reply: generated.reply, model: generated.model, provider: 'google-gemini', fallback: false, usage: generated.usage });
+  } catch (error) {
+    const providerStatus = Number(error.status) || 502;
+    console.error('[AI] Gemini request failed:', { status: providerStatus, code: error.code || 'GEMINI_UPSTREAM_ERROR' });
+    let message = 'تعذر الاتصال بنموذج Gemini. حاول مرة أخرى لاحقًا.';
+    if (providerStatus === 400) message = 'رفض Gemini صيغة الطلب. تحقق من الرسالة والإعدادات ثم أعد المحاولة.';
+    else if (providerStatus === 401 || providerStatus === 403) message = 'مفتاح Gemini غير صالح أو غير مخوّل للمشروع. راجع GEMINI_API_KEY وقيود المفتاح في Google AI Studio.';
+    else if (providerStatus === 404) message = 'لم يتعرف Gemini على معرّف النموذج. استخدم gemini-3.5-flash-lite وتحقق من إتاحة Gemini API للمشروع.';
+    else if (providerStatus === 429) message = 'تم تجاوز حصة Gemini أو حد الطلبات. تحقق من الحصة في Google AI Studio ثم أعد المحاولة.';
+    else if (error.code === 'GEMINI_TIMEOUT') message = 'انتهت مهلة الاتصال بـGemini. حاول مرة أخرى.';
+    else if (error.code === 'GEMINI_NETWORK_ERROR') message = 'تعذر الوصول إلى Gemini من الخادم. تحقق من اتصال Render ثم أعد المحاولة.';
+    const httpStatus = providerStatus === 429 ? 429 : providerStatus === 503 ? 503 : 502;
+    return res.status(httpStatus).json({ success: false, error: error.code || 'GEMINI_UPSTREAM_ERROR', message, providerStatus });
+  }
+});
 
 app.get('/api/admin/overview', auth(), admin, async (req, res) => {
   const names = ['users','access_requests','customers','suppliers','shipment_cards','invoices','sms_messages','audit_logs'];
