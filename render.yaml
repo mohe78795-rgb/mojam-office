@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: mojam-office-api
+    runtime: node
+    rootDir: .
+    buildCommand: cd server && npm install
+    startCommand: node server/src/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: mojam_office
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_EMPLOYEE_CODE
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: PORT
+        value: 10000

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HTML1 — مركز الطابعات</title>
+<style>
+:root{--red:#991b1b;--ink:#172033;--muted:#64748b;--line:#e2e8f0;--bg:#f8fafc}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Naskh Arabic UI","Noto Naskh Arabic","Noto Sans Arabic",Tahoma,Arial,sans-serif}.top{background:linear-gradient(135deg,#7f1d1d,#dc2626);color:#fff;padding:18px;position:sticky;top:0;z-index:3}.top h1{margin:0 0 6px;font-size:22px}.top p{margin:0;font-size:12px;opacity:.9}.bar,.wrap{max-width:1100px;margin:auto}.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}.bar a,.btn{border:0;border-radius:10px;padding:10px 13px;font-weight:800;cursor:pointer;text-decoration:none;font-size:12px}.bar a{background:#fff;color:#991b1b}.btn{background:#172033;color:#fff}.btn.red{background:#b91c1c}.btn.light{background:#fff;color:#172033;border:1px solid #cbd5e1}.wrap{padding:18px}.grid{display:grid;grid-template-columns:340px 1fr;gap:16px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 5px 18px #0f172a0c}.card h2{font-size:16px;margin:0 0 12px}.field{display:block;font-size:12px;font-weight:800;margin:10px 0}.field input,.field select{display:block;width:100%;margin-top:6px;border:1px solid #cbd5e1;border-radius:9px;padding:10px;font-size:13px}.list{display:grid;gap:8px;max-height:620px;overflow:auto}.invoice{border:1px solid var(--line);border-radius:12px;padding:11px;cursor:pointer;background:#fff}.invoice.active{border-color:#dc2626;background:#fff7f7}.invoice b{display:block}.invoice small{color:var(--muted)}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.preview{min-height:500px;background:#e5e7eb;padding:22px;overflow:auto}.paper{background:#fff;color:#000;width:min(100%,760px);margin:auto;padding:28px;box-shadow:0 4px 14px #0002;font-family:"Noto Naskh Arabic UI","Noto Naskh Arabic","Noto Sans Arabic",Tahoma,Arial,sans-serif}.paper h1{text-align:center;font-size:22px;margin:0 0 3px}.paper .sub{text-align:center;font-size:13px;border-bottom:2px solid #111;padding-bottom:10px}.paper .meta{display:grid;grid-template-columns:1fr 1fr;gap:6px;border:1px solid #222;padding:9px;margin:12px 0;font-size:13px}.paper table{width:100%;border-collapse:collapse;text-align:center;font-size:13px}.paper th,.paper td{border:1px solid #222;padding:7px}.paper .total{text-align:center;font-size:19px;font-weight:900;border-top:2px solid #111;padding:10px;margin-top:12px}.paper .sign{display:flex;justify-content:space-between;margin-top:36px;font-weight:bold;font-size:12px}.empty{text-align:center;color:var(--muted);padding:55px 10px}.status{font-size:12px;color:#475569;margin-top:10px}.danger{background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:10px;border-radius:10px;font-size:12px;margin-bottom:12px}.printer-box{background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:16px;box-shadow:0 5px 18px #0f172a0c}.printer-box h2{font-size:16px;margin:0 0 10px}.printer-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.printer-box label{display:block;font-size:12px;font-weight:800}.printer-box select{display:block;width:100%;margin-top:6px;border:1px solid #cbd5e1;border-radius:9px;padding:10px;font-size:13px;background:#fff}.printer-status{font-size:12px;margin-top:9px;color:#475569}.ok{color:#047857}.bad{color:#b91c1c}@media(max-width:760px){.grid{grid-template-columns:1fr}.paper{padding:14px}.paper table{font-size:10px}.paper .meta{font-size:11px}}@media print{.top,.panel,.no-print{display:none!important}.wrap,.preview{padding:0;max-width:none;background:#fff}.paper{width:100%;box-shadow:none;padding:0}}
+</style><style id="thermal-invoice-css">
+#thermal-template{width:100%;box-sizing:border-box;background:#fff;color:#000;padding:0 10px 6px;font-family:"Noto Naskh Arabic UI","Noto Naskh Arabic","Noto Sans Arabic",Tahoma,Arial,sans-serif;direction:rtl;line-height:1.45;font-weight:700;-webkit-text-stroke:0.25px #000;font-feature-settings:"rlig" 1,"calt" 1;text-rendering:optimizeLegibility}
+#thermal-template .thermal-title{text-align:center;font-weight:900;font-size:52px;line-height:1.1;margin:0 0 4px}
+#thermal-template .thermal-sub{text-align:center;font-size:28px;line-height:1.2;padding:2px 0 5px;border-bottom:2px solid #111;overflow-wrap:anywhere}
+#thermal-template .thermal-code{text-align:center;font-size:34px;direction:ltr;margin:4px auto 6px;letter-spacing:0;white-space:normal;overflow-wrap:anywhere;max-width:100%}
+#thermal-template .thermal-meta{display:grid;grid-template-columns:1fr 1fr;gap:0;border:2px solid #222;margin:6px 0;font-size:19px}
+#thermal-template .thermal-meta span{padding:3px 6px;min-height:0;display:flex;flex-direction:column;align-items:flex-start;gap:1px}
+#thermal-template .thermal-meta span:nth-child(odd){text-align:right}
+#thermal-template .thermal-meta span:nth-child(even){text-align:right}
+#thermal-template .thermal-table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:center;font-size:18px;direction:rtl}
+#thermal-template .thermal-table th,#thermal-template .thermal-table td{border:2px solid #222;padding:8px 4px;vertical-align:middle;word-break:normal;line-height:1.15!important;overflow-wrap:anywhere}
+#thermal-template .thermal-table th{font-weight:900;height:48px}
+#thermal-template .thermal-table td{font-weight:700}
+#thermal-template .thermal-table th:nth-child(1),#thermal-template .thermal-table td:nth-child(1){width:18%}
+#thermal-template .thermal-table th:nth-child(2),#thermal-template .thermal-table td:nth-child(2){width:12%}
+#thermal-template .thermal-table th:nth-child(3),#thermal-template .thermal-table td:nth-child(3){width:24%}
+#thermal-template .thermal-table th:nth-child(4),#thermal-template .thermal-table td:nth-child(4){width:28%}
+#thermal-template .thermal-table th:nth-child(5),#thermal-template .thermal-table td:nth-child(5){width:18%}
+#thermal-template .thermal-table tbody td:nth-child(3),#thermal-template .thermal-table tbody td:nth-child(4),#thermal-template .thermal-table tbody td:nth-child(5){white-space:nowrap!important;word-break:normal!important;overflow-wrap:normal!important}
+#thermal-template .thermal-total{border-top:3px solid #111;margin-top:8px;padding-top:6px;text-align:center;font-size:27px;font-weight:900}
+#thermal-template .thermal-sign-title{text-align:center;font-weight:900;margin-top:8px}
+#thermal-template .thermal-sign{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:17px;font-weight:700;white-space:normal}
+</style><style id="thermal-uniform-font-size">
+/* توحيد أحجام العربية والأرقام وكل عناصر الفاتورة الحرارية بحجم أكبر موحّد (36px) لجميع عناصر الفاتورة الحرارية. */
+#thermal-template, #thermal-template * { font-size:36px !important; line-height:1.35 !important; }
+#thermal-template .thermal-sign { white-space:normal !important; flex-wrap:wrap !important; }
+#thermal-template .thermal-meta .meta-customer,#thermal-template .thermal-meta .meta-type,#thermal-template .thermal-meta .thermal-year { grid-column:1 / -1; }
+#thermal-template .thermal-meta .thermal-year{text-align:center;display:block;padding:0;font-size:30px!important;direction:ltr}
+#thermal-template .thermal-meta .meta-field{width:100%;align-items:center!important;justify-content:center;text-align:center!important}
+#thermal-template .thermal-meta .meta-type{flex-direction:row;align-items:center;justify-content:center;text-align:center;gap:12px}
+#thermal-template .thermal-customer{display:flex;align-items:baseline;gap:10px;border-bottom:1px dotted #111;padding:3px 2px;margin:3px 0}
+#thermal-template .thermal-customer b{font-size:40px!important;overflow-wrap:anywhere}
+#thermal-template .thermal-sign span{flex:1;text-align:center;white-space:normal}
+#thermal-template .thermal-title{font-size:52px!important;line-height:1.1!important}
+#thermal-template .thermal-sub{font-size:28px!important;line-height:1.2!important}
+#thermal-template .thermal-code{font-size:34px!important;line-height:1.1!important;direction:rtl!important}
+#thermal-template .thermal-code span{direction:ltr;unicode-bidi:embed}
+#thermal-template .thermal-meta .meta-field label { font-weight:700; }
+#thermal-template .thermal-meta .meta-field b { direction:ltr; unicode-bidi:plaintext; }
+#thermal-template .thermal-meta .meta-customer b { font-size:40px !important; direction:rtl; unicode-bidi:plaintext; }
+@media (max-width:420px) {
+  #thermal-template .thermal-table,#thermal-template .thermal-table th,#thermal-template .thermal-table td { font-size:27px !important; }
+}
+</style><script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script><style id="separated-print-css">
+@page{size:A4 portrait;margin:10mm}
+@media print{
+  html,body{width:210mm!important;min-width:210mm!important;margin:0!important;padding:0!important;background:#fff!important;overflow:visible!important}
+  body *{visibility:hidden!important}
+  #pdf-modal,#pdf-modal *,.pdf-full-page,.pdf-full-page *,.print-sheet,.print-sheet *,.invoice-pdf-sheet,.invoice-pdf-sheet *,.paper,.paper *{visibility:visible!important}
+  #pdf-modal{position:static!important;display:block!important;background:#fff!important;padding:0!important;overflow:visible!important}
+  #pdf-action-bar,.no-print,.panel,.top{display:none!important}
+  #pdf-render-zone{display:block!important;width:190mm!important;max-width:190mm!important;margin:0 auto!important;padding:0!important}
+  .pdf-full-page,.print-sheet,.invoice-pdf-sheet,.paper{display:block!important;width:190mm!important;max-width:190mm!important;min-width:0!important;margin:0 auto!important;padding:0!important;box-sizing:border-box!important;box-shadow:none!important;transform:none!important;overflow:visible!important}
+  #androidbridge-invoice-capture,.thermal-print-window{display:none!important;visibility:hidden!important}
+  table{max-width:190mm!important;table-layout:fixed!important;word-break:break-word!important}
+}
+</style>
+</head>
+<body>
+<header class="top"><div class="bar"><div style="flex:1"><h1>HTML1 — مركز الطابعات</h1><p>مرتبط مباشرة ببيانات النظام اليومية — لا ينسخ الفواتير ولا يغيّرها.</p></div><a href="index.html">العودة للنظام</a><a href="HTML2.html">مركز الكشوف</a></div></header>
+<main class="wrap">
+<div class="danger">للطباعة الحرارية يجب تشغيل التطبيق داخل Android WebView الذي يحتوي على AndroidBridge. من المتصفح العادي سيعمل زر PDF/طباعة الشاشة فقط.</div>
+<section class="printer-box panel">
+  <h2>إعداد الطابعة الحرارية</h2>
+  <div class="printer-row">
+    <label>الطابعة المقترنة
+      <select id="printerSelect" onchange="savePrinterConfig()">
+        <option value="">-- اضغط تحديث للبحث --</option>
+      </select>
+    </label>
+    <label>مقاس الرول
+      <select id="printerWidth" onchange="savePrinterConfig()">
+        <option value="576">80mm — 576 dots — RPP300</option>
+        <option value="384">58mm — 384 dots</option>
+      </select>
+    </label>
+  </div>
+  <div class="actions">
+    <button class="btn" onclick="loadPrinters()">بحث عن الطابعات المقترنة</button>
+    <button class="btn light" onclick="clearPrinterConfig()">مسح الاختيار</button>
+  </div>
+  <div id="printerStatus" class="printer-status">لم يتم البحث بعد</div>
+</section>
+<div class="grid"><section class="card panel"><h2>الفواتير المتاحة للطباعة</h2><label class="field">التاريخ<input id="date" type="date"></label><label class="field">بحث<input id="search" placeholder="رقم الفاتورة أو اسم العميل"></label><div id="list" class="list"></div></section><section><div id="preview" class="preview"><div class="empty">اختر فاتورة من القائمة</div></div><div class="card panel" style="margin-top:12px"><div class="actions"><button class="btn red" onclick="printThermal()">طباعة حرارية عبر AndroidBridge</button><button class="btn" onclick="printPdf()">طباعة عادية / PDF</button><button class="btn light" onclick="load()">تحديث البيانات</button></div><div id="status" class="status">جاهز</div></div></section></div></main>
+<script>
+const CATS=['كبير','وسط','مطاعم','جفش','صغير'];let invoices=[],selected=null,thermalBusy=false,lastThermal='';const $=id=>document.getElementById(id);function read(k,d){try{return JSON.parse(localStorage.getItem(k)||'null')??d}catch(e){return d}}function today(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}function esc(v){return String(v??'').replace(/[&<>"']/g,'')}function fmt(v){return (+v||0).toLocaleString('en-US')}function load(){const date=$('date').value||localStorage.getItem('mojam_date')||today();$('date').value=date;invoices=read('mojam_invoices_'+date,[]);selected=null;renderList();$('preview').innerHTML='<div class="empty">اختر فاتورة من القائمة</div>';$('status').textContent='تم تحميل '+invoices.length+' فاتورة للتاريخ '+date}function renderList(){const q=$('search').value.trim().toLowerCase();const rows=invoices.filter(x=>!q||String(x.num||'').toLowerCase().includes(q)||String(x.customer||'').toLowerCase().includes(q));$('list').innerHTML=rows.length?rows.map((x,i)=>`<div class="invoice" data-index="${invoices.indexOf(x)}" onclick="selectInvoice(${invoices.indexOf(x)})"><b>فاتورة رقم ${esc(x.num||'—')}</b><small>${esc(x.customer||'مبيعات نقداً')} — ${fmt(x.total)} ريال</small><small>${esc(x.type||'نقد')} — ${esc(x.date||$('date').value)}</small></div>`).join(''):'<div class="empty">لا توجد فواتير لهذا البحث</div>'}function invoiceHTML(inv){const rows=(inv.items||[]).filter(x=>x.qty!=='-'&&x.price!=='-').map(x=>`<tr><td>${esc(x.name==='جفش'?'جفوش':x.name)}</td><td>${esc(x.cardNo||'—')}</td><td>${esc(x.qty)}</td><td>${fmt(x.price)}</td><td>${fmt(x.total)}</td></tr>`).join('');const customer=inv.customer&&inv.customer!=='عميل عام'?inv.customer:'مبيعات نقداً';return `<article class="paper" dir="rtl"><h1>مكتب معجم لتسويق الدواجن</h1><div class="sub">الجمهورية اليمنية — محافظة البيضاء — سوق الحوم المركزي
+     "737980235_733436682_736014373</div><div class="meta"><span>رقم الفاتورة: <b>${esc(inv.num)}</b></span><span>التاريخ: <b>${esc(inv.date||$('date').value)}</b></span><span>العميل: <b>${esc(customer)}</b></span><span>النوع: <b>${esc(inv.type||'نقد')}</b></span></div><table><thead><tr><th>الصنف</th><th>الكرت</th><th>الكمية</th><th>سعر الحبة</th><th>الإجمالي</th></tr></thead><tbody>${rows||'<tr><td colspan="5">لا توجد أصناف</td></tr>'}</tbody></table><div class="total">الإجمالي العام: ${fmt(inv.total)} ريال</div><div class="sign"><span>توقيع الزبون: __________</span>
+     <span>توقيع سائق الباص: __________</span>
+     <span>البائع: عـــلي الـــقيسي</span></div></article>`}function selectInvoice(i){selected=invoices[i];document.querySelectorAll('.invoice').forEach(x=>x.classList.remove('active'));document.querySelector(`[data-index="${i}"]`)?.classList.add('active');$('preview').innerHTML=invoiceHTML(selected);$('status').textContent='تم اختيار الفاتورة رقم '+(selected.num||'—')}async function printThermal(){if(!selected)return alert('اختر فاتورة أولاً');if(!getPrinterMac())return alert('اختر الطابعة من إعدادات الطابعة أولاً');if(typeof window.printDirectBluetoothInvoice==='function'){window.printDirectBluetoothInvoice();}else{alert('مسار Bluetooth غير متاح');}}async function printPdf(){var title=selected?'فاتورة_'+(selected.num||''):'فاتورة_معجم';if(window.AndroidBridge&&typeof window.AndroidBridge.printInvoice==='function'){window.AndroidBridge.printInvoice(title);}else if(window.Android&&typeof window.Android.printPage==='function'){window.Android.printPage(title);}else{window.print();}}function getPrinterMac(){const v=localStorage.getItem('printer_mac')||localStorage.getItem('mojam_printer_mac')||'';return v.trim()||null;}
+function getPrinterWidth(){return parseInt(localStorage.getItem('printer_width')||localStorage.getItem('mojam_printer_width')||'576')||576;}
+function setPrinterStatus(text,ok=false){const el=$('printerStatus');if(el){el.textContent=text;el.className='printer-status '+(ok?'ok':'bad');}}
+function savePrinterConfig(){const mac=$('printerSelect').value;const width=parseInt($('printerWidth').value)||576;if(mac){localStorage.setItem('printer_mac',mac);localStorage.setItem('mojam_printer_mac',mac);}localStorage.setItem('printer_width',String(width));localStorage.setItem('mojam_printer_width',String(width));setPrinterStatus(mac?'تم حفظ الطابعة: '+mac+' — '+width+' dots':'اختر طابعة أولاً',!!mac);}
+function clearPrinterConfig(){localStorage.removeItem('printer_mac');localStorage.removeItem('mojam_printer_mac');$('printerSelect').value='';setPrinterStatus('تم مسح اختيار الطابعة',false);}
+function loadPrinters(){if(!window.AndroidBridge||typeof window.AndroidBridge.getPairedPrinters!=='function'){setPrinterStatus('AndroidBridge غير متاح. افتح الواجهة داخل تطبيق Android.',false);return;}try{const arr=JSON.parse(window.AndroidBridge.getPairedPrinters()||'[]');const select=$('printerSelect');const saved=getPrinterMac();select.innerHTML='<option value="">-- اختر طابعة --</option>'+arr.map(p=>'<option value="'+String(p.address||'').replace(/"/g,'&quot;')+'">'+String(p.name||'طابعة').replace(/[&<>]/g,'')+' ('+String(p.address||'')+')</option>').join('');if(saved)select.value=saved;$('printerWidth').value=String(getPrinterWidth());setPrinterStatus(arr.length?'تم العثور على '+arr.length+' جهاز مقترن':'لم يتم العثور على أجهزة مقترنة',!!arr.length);}catch(e){setPrinterStatus('تعذر قراءة قائمة Bluetooth: '+e.message,false);}}
+$('date').addEventListener('change',load);$('search').addEventListener('input',renderList);$('printerWidth').value=String(getPrinterWidth());load();setTimeout(loadPrinters,300);
+</script><script>
+(function(){function printerMac(){const v=localStorage.getItem('printer_mac')||localStorage.getItem('mojam_printer_mac');return v&&v.trim()?v.trim():null;}function buildSeparateThermalTemplate(inv){
+  const safe=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  const money=v=>(+v||0).toLocaleString('en-US');
+  const customer=inv.customer&&inv.customer!=='عميل عام'?inv.customer:'مبيعات نقداً';
+  const items=(inv.items||[]).filter(x=>x.qty!=='-'&&x.price!=='-');
+  const rows=items.map(x=>`<tr><td>${safe(x.name==='جفش'?'جفوش':x.name)}</td><td>${safe(x.qty)}</td><td>${money(x.price)}</td><td>${money(x.total)}</td><td>${safe(x.cardNo||'—')}</td></tr>`).join('')||'<tr><td colspan="5">لا توجد أصناف</td></tr>';
+  return `<article id="thermal-template" lang="ar" dir="rtl">
+    <div class="thermal-title">معجم للدواجن</div>
+    <div class="thermal-sub">البيضاء - مقابل عمارة التوحيد</div>
+    <div class="thermal-code"><span>ت:</span> <span>733436682-737980235</span></div>
+    <div class="thermal-meta">
+      <span class="meta-field"><label>رقم الفاتورة</label><b>${safe(inv.num||'—')}</b></span>
+      <span class="meta-field"><label>التاريخ</label><b>${safe((()=>{const d=String(inv.date||$('date').value||'');const m=d.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);return m?`${m[3].padStart(2,'0')}-${m[2].padStart(2,'0')}`:d})())}</b></span>
+      <span class="thermal-year">${safe((()=>{const d=String(inv.date||$('date').value||'');const m=d.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);return m?m[1]:''})())}</span>
+      <span class="meta-type"><label>بيع</label><b>${safe(inv.type||'نقد')}</b></span>
+    </div>
+    <div class="thermal-customer"><span>العميل</span><b>${safe(customer)}</b></div>
+    <table class="thermal-table"><thead><tr><th>نوع</th><th>عدد</th><th>سعر</th><th>إجمالي</th><th>وارد</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="thermal-total">الإجمالي العام: ${money(inv.total)} ريال</div>
+    <div class="thermal-sign-title">توقيع</div><div class="thermal-sign"><span>عميل: ______</span><span>بائع: ______</span><span>مستلم: ______</span></div>
+  </article>`;
+}
+async function directBluetoothBitmap(inv){if(!inv||(+inv.total||0)<=0){alert('يرجى تسجيل كميات أو أسعار أولاً');return;}if(!window.AndroidBridge||typeof window.AndroidBridge.printDirectBluetooth!=='function'){alert('AndroidBridge.printDirectBluetooth غير متاح داخل تطبيق أندرويد.');return;}if(typeof html2canvas!=='function'){alert('مكتبة html2canvas غير متاحة.');return;}const dots=parseInt(localStorage.getItem('printer_width')||localStorage.getItem('mojam_printer_width')||'576')||576;const host=document.createElement('div');host.style.cssText='position:fixed;left:-10000px;top:0;width:'+dots+'px;background:#fff;color:#000;padding:0;direction:rtl;font-family:"Noto Naskh Arabic UI","Noto Naskh Arabic",Tahoma,Arial,sans-serif;font-size:16px;line-height:1.35;';host.innerHTML=buildSeparateThermalTemplate(inv);document.body.appendChild(host);try{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));if(document.fonts&&document.fonts.load){await document.fonts.load('900 52px "Noto Naskh Arabic"');await document.fonts.load('700 36px "Noto Naskh Arabic"');await document.fonts.ready;}let canvas=await html2canvas(host,{width:dots,windowWidth:dots,scale:1,backgroundColor:'#fff',useCORS:true,logging:false});const scan=canvas.getContext('2d',{willReadFrequently:true});let firstInk=0;for(let y=0;y<canvas.height;y++){const row=scan.getImageData(0,y,canvas.width,1).data;let found=false;for(let x=0;x<canvas.width;x+=2){const p=x*4;if((0.299*row[p]+0.587*row[p+1]+0.114*row[p+2])<245){found=true;break;}}if(found){firstInk=y;break;}}if(firstInk>0){const trimmed=document.createElement('canvas');trimmed.width=canvas.width;trimmed.height=Math.max(1,canvas.height-firstInk);trimmed.getContext('2d').drawImage(canvas,0,firstInk);canvas=trimmed;}window.AndroidBridge.printDirectBluetooth(canvas.toDataURL('image/png'),printerMac(),dots);$('status').textContent='تم إرسال الصورة للطباعة الحرارية عبر Bluetooth';}catch(e){console.error(e);alert('تعذر تجهيز صورة الفاتورة للطباعة الحرارية.');}finally{host.remove();}}window.printDirectBluetoothInvoice=()=>directBluetoothBitmap(typeof selected!=='undefined'?selected:null);window.mojamDirectBluetoothBitmapReady=true;})();
+</script>
+</body></html>
