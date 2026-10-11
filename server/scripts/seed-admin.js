@@ -34,6 +34,8 @@ if (!password || password.length < 10) {
       account_id: accountId,
       employee_code: employeeCode,
       full_name: 'مدير النظام',
+      phone: employeeCode,
+      phone_normalized: String(employeeCode).replace(/\D/g, '').slice(-9),
       password_hash: await bcrypt.hash(password, 12),
       roles: ['owner', 'admin'],
       permissions: ['*'],
