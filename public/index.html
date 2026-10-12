@@ -813,7 +813,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                     <button id="type-credit" onclick="setInvoiceType('آجل')" class="px-3.5 py-1.5 rounded-xl text-xs font-black text-slate-600 bg-slate-100 hover:bg-slate-200 transition">آجل</button>
                 </div>
                 <div class="text-left font-mono text-xs font-bold text-slate-700">
-                    رقم الفاتورة: <input type="number" id="inv-num" value="14002" class="w-20 p-1 border rounded-lg text-center font-bold font-mono">
+                    رقم الفاتورة: <input type="text" inputmode="numeric" id="inv-num" value="—" readonly aria-label="رقم الفاتورة المحجوز تلقائيًا" class="w-24 p-1 border rounded-lg text-center font-bold font-mono bg-slate-50">
                 </div>
             </div>
 
@@ -5625,6 +5625,7 @@ function buildSeparateThermalTemplate(inv){
 
   const showBlocked = (name, message) => {
     localStorage.removeItem(tokenKey);
+    localStorage.removeItem('mojam_current_user');
     gate.style.display = 'flex';
     gate.innerHTML = `<div style="width:min(520px,100%);background:#fff;border-radius:24px;padding:42px 25px;text-align:center;box-shadow:0 20px 70px #0002;direction:rtl;font-family:Arial,Tahoma,sans-serif"><div style="width:82px;height:82px;border-radius:50%;margin:0 auto 18px;background:#fff1f2;border:3px solid #e11d48;color:#be123c;display:flex;align-items:center;justify-content:center;font-size:42px;font-weight:900">!</div><div style="font-size:22px;color:#991b1b;font-weight:900;margin-bottom:10px">مكتب معجم</div><div style="font-size:17px;color:#1e293b;font-weight:900;margin-bottom:12px">عزيزي ${escapeHtml(name || 'المستخدم')}</div><div style="font-size:15px;color:#991b1b;font-weight:800;line-height:2">${escapeHtml(message || 'لقد تم حظرك من قبل المدير.')}</div><div style="font-size:12px;color:#64748b;margin-top:18px">شكرًا لك</div></div>`;
   };
@@ -5658,11 +5659,18 @@ function buildSeparateThermalTemplate(inv){
     return data;
   };
   const showAdminOrEnter = (data, message) => {
-    const isAdmin = (data.user.roles || []).some(role => ['admin', 'owner'].includes(role));
+    const user = data.user || {};
+    const profile = { id: String(user.id || ''), name: String(user.name || user.full_name || user.fullName || user.employeeCode || '').trim(), employeeCode: String(user.employeeCode || user.employee_code || '') };
+    if (profile.name) {
+      window.mojamCurrentUser = profile;
+      localStorage.setItem('mojam_current_user', JSON.stringify(profile));
+    }
+    const isAdmin = (user.roles || []).some(role => ['admin', 'owner'].includes(role));
     gate.style.display = 'none';
     adminTrigger.hidden = !isAdmin;
     closeAdminModal();
     if (message && typeof window.showToast === 'function') window.showToast(message);
+    if (typeof window.ensureUniqueInvoiceNumber === 'function') window.ensureUniqueInvoiceNumber(undefined, true);
   };
   const schedulePoll = () => {
     if (!pendingCredentials) return;
@@ -5796,7 +5804,7 @@ function buildSeparateThermalTemplate(inv){
       adminTrigger.hidden = true;
       closeAdminModal();
       if (error.code === 'USER_BLOCKED') showBlocked(error.payload?.fullName, error.payload?.message);
-      else localStorage.removeItem(tokenKey);
+      else { localStorage.removeItem(tokenKey); localStorage.removeItem('mojam_current_user'); }
     });
   }
 })();
@@ -6282,6 +6290,14 @@ function buildSeparateThermalTemplate(inv){
     buttons.forEach(button => { button.disabled = true; button.dataset.oldText = button.textContent; button.textContent = 'جارٍ الحفظ…'; });
     const data = pendingInvoiceCheckout;
     try {
+      if (!Number.isInteger(editingInvoiceIndex)) {
+        const reserved = await window.ensureUniqueInvoiceNumber();
+        const reservation = window.mojamInvoiceNumberReservation;
+        if (!reserved || !reservation?.invoiceNumber) throw new Error('تعذر حجز رقم فاتورة فريد. تحقق من اتصال الإنترنت ثم أعد المحاولة.');
+        data.num = reservation.invoiceNumber;
+        data.sellerName = reservation.sellerName || window.mojamCurrentUser?.name || '';
+        data.sellerUserId = reservation.sellerUserId || window.mojamCurrentUser?.id || '';
+      }
       const saved = window.commitInvoiceData(data);
       if (!saved) { buttons.forEach(button => { button.disabled = false; button.textContent = button.dataset.oldText || button.textContent; }); return; }
       window.closeInvoiceCheckout();
@@ -6292,7 +6308,7 @@ function buildSeparateThermalTemplate(inv){
     } catch (error) {
       console.error(error);
       buttons.forEach(button => { button.disabled = false; });
-      alert('تعذر إكمال الحفظ. راجع الاتصال وحاول مرة أخرى.');
+      alert(error.message || 'تعذر إكمال الحفظ. راجع الاتصال وحاول مرة أخرى.');
     }
   };
 
@@ -6570,6 +6586,73 @@ function buildSeparateThermalTemplate(inv){
 #supplier-card-modal .mojam-modal-cancel{width:100%;padding:10px;border:0;border-radius:12px;background:#f1f5f9;color:#475569;font-size:12px;font-weight:900}
 @media(max-width:760px){#view-invoices .inv-table{min-width:650px!important}#invoice-summary-grid .summary-card{padding:8px 4px}#invoice-summary-grid .summary-card>span{font-size:9px}#invoice-summary-grid .summary-card strong{font-size:13px}#view-invoices .cell-box{font-size:12px;padding:6px 3px}}
 </style>
-<script src="/invoice-manual-cards.js?v=2"></script>
+<script src="/invoice-manual-cards.js?v=3"></script>
+<script id="mojam-server-invoice-numbering">
+(function () {
+  const apiBase = 'https://mojam-office.onrender.com';
+  const tokenKey = 'mojam_access_token';
+  let reservation = null;
+  let reservationPromise = null;
+
+  try { window.mojamCurrentUser = JSON.parse(localStorage.getItem('mojam_current_user') || 'null'); }
+  catch (_) { window.mojamCurrentUser = null; }
+  window.mojamInvoiceNumberReservation = null;
+
+  window.consumeInvoiceNumberReservation = function () {
+    reservation = null;
+    window.mojamInvoiceNumberReservation = null;
+  };
+
+  window.ensureUniqueInvoiceNumber = function (_minimum, force = false) {
+    const input = document.getElementById('inv-num');
+    const editing = typeof editingInvoiceIndex !== 'undefined' && Number.isInteger(editingInvoiceIndex);
+    if (editing && !force) return Promise.resolve(true);
+    const token = localStorage.getItem(tokenKey);
+    if (!token) { if (input && !editing) input.value = '—'; return Promise.resolve(false); }
+
+    const currentUser = window.mojamCurrentUser || {};
+    if (!force && reservation && (!currentUser.id || reservation.sellerUserId === String(currentUser.id))) {
+      if (input && !editing) input.value = reservation.invoiceNumber;
+      return Promise.resolve(true);
+    }
+    if (reservationPromise) return reservationPromise;
+    if (force) window.consumeInvoiceNumberReservation();
+    if (input && !editing) input.value = 'جارٍ حجز رقم…';
+
+    reservationPromise = (async () => {
+      const response = await fetch(apiBase + '/api/invoices/next-number', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: '{}'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.success !== true || !/^\d{5,}$/.test(String(result.invoiceNumber || ''))) {
+        throw new Error(result.message || result.error || 'تعذر حجز رقم فاتورة فريد.');
+      }
+      reservation = {
+        invoiceNumber: String(result.invoiceNumber),
+        sellerName: String(result.sellerName || currentUser.name || ''),
+        sellerUserId: String(result.sellerUserId || currentUser.id || '')
+      };
+      window.mojamInvoiceNumberReservation = reservation;
+      if (!window.mojamCurrentUser && reservation.sellerName) {
+        window.mojamCurrentUser = { id: reservation.sellerUserId, name: reservation.sellerName };
+        localStorage.setItem('mojam_current_user', JSON.stringify(window.mojamCurrentUser));
+      }
+      if (input && !editing) input.value = reservation.invoiceNumber;
+      return true;
+    })().catch(error => {
+      reservation = null;
+      window.mojamInvoiceNumberReservation = null;
+      if (input && !editing) input.value = '—';
+      console.error('تعذر حجز رقم الفاتورة:', error);
+      if (typeof window.showToast === 'function') window.showToast('تعذر حجز رقم فاتورة فريد. تحقق من الاتصال ثم أعد المحاولة.');
+      return false;
+    }).finally(() => { reservationPromise = null; });
+
+    return reservationPromise;
+  };
+})();
+</script>
 </body>
 </html>

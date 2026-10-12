@@ -305,7 +305,7 @@
     const legacy = Number.isInteger(editingInvoiceIndex) ? batchInvoices?.[editingInvoiceIndex] : null;
     const grand = num(document.getElementById('inv-grand-total')?.textContent?.replace(/,/g, ''));
     const byCategory = Object.fromEntries(CATEGORIES.map(category => [category, items.filter(item => item.name === category).reduce((sum, item) => sum + lineBoxes(item), 0)]));
-    return { invoiceId: '', num: document.getElementById('inv-num')?.value || '14002', customer: customer || 'عميل عام', phone: (document.getElementById('cust-phone')?.value || '').trim(), type: customer ? 'آجل' : 'نقد', total: grand.toFixed(2), totalChicken, items, date: currentActiveDate || '', crates: num(legacy?.crates), capacity: num(legacy?.capacity), emptyCratesReceived, emptyCratesTotal: emptyCratesReceived, emptyCratesByCategory: byCategory, boxReceiver: legacy?.boxReceiver || '' };
+    return { invoiceId: '', num: document.getElementById('inv-num')?.value || '', customer: customer || 'عميل عام', phone: (document.getElementById('cust-phone')?.value || '').trim(), type: customer ? 'آجل' : 'نقد', total: grand.toFixed(2), totalChicken, items, date: currentActiveDate || '', crates: num(legacy?.crates), capacity: num(legacy?.capacity), emptyCratesReceived, emptyCratesTotal: emptyCratesReceived, emptyCratesByCategory: byCategory, boxReceiver: legacy?.boxReceiver || '', sellerName: legacy?.sellerName || window.mojamCurrentUser?.name || '', sellerUserId: legacy?.sellerUserId || window.mojamCurrentUser?.id || '' };
   };
 
   function cardBalanceAtSave(cardId, category) {
@@ -363,9 +363,27 @@
     const index = Number.isInteger(editingInvoiceIndex) ? editingInvoiceIndex : null;
     const old = index !== null ? batchInvoices?.[index] : null;
     if (index === null) {
-      const requestedNumber = window.parseInvoiceNumber ? window.parseInvoiceNumber(data.num) : Number(data.num);
-      const duplicate = (batchInvoices || []).some(invoice => Number(invoice.num) === Number(requestedNumber));
-      if (duplicate) { data.num = window.nextUniqueInvoiceNumber ? window.nextUniqueInvoiceNumber(requestedNumber || 14002) : String((requestedNumber || 14002) + 1); if (typeof window.showToast === 'function') window.showToast(`الرقم مستخدم؛ اخترت الرقم التالي ${data.num}`); }
+      const reservation = window.mojamInvoiceNumberReservation;
+      if (!reservation?.invoiceNumber || String(data.num) !== String(reservation.invoiceNumber)) {
+        alert('لم يُحجز رقم فاتورة فريد بعد. تحقق من اتصال الإنترنت ثم أعد الحفظ.');
+        if (typeof window.ensureUniqueInvoiceNumber === 'function') window.ensureUniqueInvoiceNumber();
+        return false;
+      }
+      const reservedNumeric = Number(reservation.invoiceNumber);
+      const duplicate = (batchInvoices || []).some((invoice, invoiceIndex) => invoiceIndex !== index && Number(invoice.num) === reservedNumeric);
+      if (duplicate) {
+        if (typeof window.consumeInvoiceNumberReservation === 'function') window.consumeInvoiceNumberReservation();
+        if (typeof window.ensureUniqueInvoiceNumber === 'function') window.ensureUniqueInvoiceNumber(undefined, true);
+        alert('ظهر رقم قديم مطابق في تكدس هذا الجهاز. حُجز رقم جديد؛ راجع الرقم الظاهر ثم احفظ مرة أخرى.');
+        return false;
+      }
+      data.num = String(reservation.invoiceNumber);
+      data.sellerName = String(reservation.sellerName || window.mojamCurrentUser?.name || 'غير مسجل');
+      data.sellerUserId = String(reservation.sellerUserId || window.mojamCurrentUser?.id || '');
+    } else {
+      data.num = old?.num || data.num;
+      data.sellerName = old?.sellerName || data.sellerName || window.mojamCurrentUser?.name || 'غير مسجل';
+      data.sellerUserId = old?.sellerUserId || data.sellerUserId || window.mojamCurrentUser?.id || '';
     }
     data.invoiceId = data.invoiceId || old?.invoiceId || old?.id || `inv_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     data.createdAt = old?.createdAt || old?.created_at || new Date().toISOString();
@@ -376,6 +394,7 @@
     if (typeof lastSavedInvoiceForThermal !== 'undefined') lastSavedInvoiceForThermal = window.lastSavedInvoiceForThermal;
     const retryButton = document.querySelector('.retry-last-thermal-print'); if (retryButton) retryButton.style.display = 'inline-block';
     editingInvoiceIndex = null;
+    if (index === null && typeof window.consumeInvoiceNumberReservation === 'function') window.consumeInvoiceNumberReservation();
     if (typeof window.setInvoiceEditMode === 'function') window.setInvoiceEditMode(false);
     window.resetInvoiceForm((Number(data.num) || 14001) + 1);
     if (typeof window.syncSystem === 'function') window.syncSystem();
@@ -427,7 +446,7 @@
       const source = item.sourceLabel || (card ? cardTitle(card) : 'المخزون العام');
       return `<tr><td>${esc(item.name === 'جفش' ? 'جفوش' : item.name)}</td><td>${esc(source)}</td><td>${fmt(item.qty)}</td><td>${fmt(item.price)}</td><td>${fmt(item.total)}</td><td>${fmt(lineBoxes(item))}</td></tr>`;
     }).join('');
-    return `<div class="print-sheet" dir="rtl"><div style="display:flex;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:8px"><div><h2 style="font-size:18px;font-weight:900;margin:0;color:#0f766e">مكتب معجم لتسويق الدواجن</h2><p style="font-size:11px;margin:2px 0">سوق الخوم المركزي للإنتاج والتسويق</p></div><div style="text-align:left;font-family:monospace;font-size:11px"><div>النوع: <b>${esc(invoice.type || 'نقد')}</b></div><div>الرقم: <b>${esc(invoice.num || '')}</b></div><div>التاريخ: <b>${esc(invoice.date || '')}</b></div></div></div><div style="background:#f1f5f9;padding:5px 8px;margin-bottom:8px;font-size:12px;display:flex;justify-content:space-between;font-weight:bold"><span>الزبون: ${esc(invoice.customer || 'عميل عام')}</span><span>الهاتف: ${esc(invoice.phone || '—')}</span></div><table style="width:100%;border-collapse:collapse;text-align:center;font-size:10px;border:1px solid #000"><thead><tr style="background:#e2e8f0"><th>الصنف</th><th>المورد / السائق / الكرت</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th><th>صناديق فارغة</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#fef3c7;font-weight:bold"><td colspan="5">المجموع الكلي</td><td>${fmt(invoice.total)} ريال</td></tr></tfoot></table><div style="margin-top:6px;font-size:10px;font-weight:bold">إجمالي الصناديق الفارغة: ${fmt(boxes)}</div><div style="display:flex;justify-content:space-between;margin-top:18px;font-size:10px;font-weight:bold"><span>توقيع المستلم: ........</span><span>ختم المحل</span><span>توقيع البائع: ........</span></div></div>`;
+    return `<div class="print-sheet" dir="rtl"><div style="display:flex;justify-content:space-between;border-bottom:2px solid #000;padding-bottom:8px;margin-bottom:8px"><div><h2 style="font-size:18px;font-weight:900;margin:0;color:#0f766e">مكتب معجم لتسويق الدواجن</h2><p style="font-size:11px;margin:2px 0">سوق الخوم المركزي للإنتاج والتسويق</p></div><div style="text-align:left;font-family:monospace;font-size:11px"><div>النوع: <b>${esc(invoice.type || 'نقد')}</b></div><div>الرقم: <b>${esc(invoice.num || '')}</b></div><div>التاريخ: <b>${esc(invoice.date || '')}</b></div></div></div><div style="background:#f1f5f9;padding:5px 8px;margin-bottom:8px;font-size:12px;display:flex;justify-content:space-between;font-weight:bold"><span>الزبون: ${esc(invoice.customer || 'عميل عام')}</span><span>الهاتف: ${esc(invoice.phone || '—')}</span></div><table style="width:100%;border-collapse:collapse;text-align:center;font-size:10px;border:1px solid #000"><thead><tr style="background:#e2e8f0"><th>الصنف</th><th>المورد / السائق / الكرت</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th><th>صناديق فارغة</th></tr></thead><tbody>${rows}</tbody><tfoot><tr style="background:#fef3c7;font-weight:bold"><td colspan="5">المجموع الكلي</td><td>${fmt(invoice.total)} ريال</td></tr></tfoot></table><div style="margin-top:6px;font-size:10px;font-weight:bold">إجمالي الصناديق الفارغة: ${fmt(boxes)}</div><div style="display:flex;justify-content:space-between;margin-top:18px;font-size:10px;font-weight:bold"><span>توقيع المستلم: ........</span><span>ختم المحل</span><span>البائع: ${esc(invoice.sellerName || 'غير مسجل')}</span></div></div>`;
   };
 
   window.thermalInvoiceMarkup = function (invoice) {
@@ -436,7 +455,7 @@
       const card = cardById(sourceIdForItem(item, invoice));
       return `<tr><td>${esc(item.name === 'جفش' ? 'جفوش' : item.name)}<br><small>${esc(item.sourceLabel || (card ? cardTitle(card) : 'المخزون العام'))}</small></td><td>${fmt(item.qty)}</td><td>${fmt(item.price)}</td><td>${fmt(item.total)}</td><td>${fmt(lineBoxes(item))}</td></tr>`;
     }).join('');
-    return `<article dir="rtl" lang="ar" style="font-family:Arial,Tahoma,sans-serif;color:#000"><h3 style="text-align:center">مكتب معجم لتسويق الدواجن</h3><div style="border-block:1px dashed #000;padding:5px;font-size:12px">فاتورة: ${esc(invoice.num || '')}<br>التاريخ: ${esc(invoice.date || '')}<br>العميل: ${esc(invoice.customer || 'مبيعات نقداً')}<br>الهاتف: ${esc(invoice.phone || '—')}</div><table style="width:100%;border-collapse:collapse;font-size:11px;text-align:center"><thead><tr><th>الصنف / الكرت</th><th>كمية</th><th>سعر</th><th>إجمالي</th><th>فارغة</th></tr></thead><tbody>${rows}</tbody></table><h3 style="text-align:center">الإجمالي: ${fmt(invoice.total)} ريال</h3><p style="font-size:11px">مجموع الصناديق الفارغة: ${fmt(boxes)}</p><p style="text-align:center">شكراً لتعاملكم معنا</p></article>`;
+    return `<article dir="rtl" lang="ar" style="font-family:Arial,Tahoma,sans-serif;color:#000"><h3 style="text-align:center">مكتب معجم لتسويق الدواجن</h3><div style="border-block:1px dashed #000;padding:5px;font-size:12px">فاتورة: ${esc(invoice.num || '')}<br>التاريخ: ${esc(invoice.date || '')}<br>العميل: ${esc(invoice.customer || 'مبيعات نقداً')}<br>الهاتف: ${esc(invoice.phone || '—')}</div><table style="width:100%;border-collapse:collapse;font-size:11px;text-align:center"><thead><tr><th>الصنف / الكرت</th><th>كمية</th><th>سعر</th><th>إجمالي</th><th>فارغة</th></tr></thead><tbody>${rows}</tbody></table><h3 style="text-align:center">الإجمالي: ${fmt(invoice.total)} ريال</h3><p style="font-size:11px">مجموع الصناديق الفارغة: ${fmt(boxes)}</p><p style="border-top:1px dashed #000;padding-top:5px;text-align:center;font-size:11px;font-weight:bold">البائع: ${esc(invoice.sellerName || 'غير مسجل')}</p><p style="text-align:center">شكراً لتعاملكم معنا</p></article>`;
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => {

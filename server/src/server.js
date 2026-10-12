@@ -10,6 +10,7 @@ const morgan = require('morgan');
 const { MongoClient } = require('mongodb');
 const { generateGeminiReply } = require('./gemini');
 const { buildBusinessContext } = require('./business-context');
+const { reserveInvoiceNumber } = require('./invoice-numbering');
 
 const PORT = Number(process.env.PORT || 10000);
 const DB_NAME = process.env.MONGODB_DB || 'mojam_office';
@@ -187,6 +188,15 @@ app.get('/api/ai/models', (req, res) => {
   const knownNames = { 'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite', 'gemini-3.5-flash': 'Gemini 3.5 Flash' };
   const models = [{ id: GEMINI_MODEL, name: knownNames[GEMINI_MODEL] || GEMINI_MODEL, provider: 'Google Gemini', active: true }];
   res.json({ success: true, models, data: models, defaultModel: GEMINI_MODEL, configured: Boolean(GEMINI_API_KEY) });
+});
+app.post('/api/invoices/next-number', auth(), async (req, res) => {
+  try {
+    const reservation = await reserveInvoiceNumber(db, ACCOUNT_ID, req.user, now());
+    return res.json({ success: true, ...reservation });
+  } catch (error) {
+    console.error('[INVOICE] number reservation failed:', { code: error.code || error.message || 'INVOICE_NUMBER_UNAVAILABLE' });
+    return res.status(503).json({ success: false, error: 'INVOICE_NUMBER_UNAVAILABLE', message: 'تعذر حجز رقم فاتورة فريد الآن. تحقق من الاتصال ثم أعد المحاولة.' });
+  }
 });
 app.get('/api/automation', async (req, res) => res.json({ success: true, data: await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID }) || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true } }));
 app.put('/api/automation', auth(), admin, async (req, res) => { const data = { ...req.body, account_id: ACCOUNT_ID, updated_at: now() }; await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true }); res.json({ success: true, data }); });
