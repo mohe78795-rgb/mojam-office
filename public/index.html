@@ -1866,6 +1866,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                 dailyPrices[c] = val;
             });
             localStorage.setItem('mojam_daily_prices', JSON.stringify(dailyPrices));
+            if (typeof syncSystem === 'function') syncSystem();
         }
 
         function loadSavedDailyPrices() {
@@ -4249,6 +4250,7 @@ function buildSeparateThermalTemplate(inv){
                 expenses: Array.isArray(dailyExpenses) ? dailyExpenses : [],
                 incomingCards: Array.isArray(incomingCards) ? incomingCards : [],
                 stock: stockState && typeof stockState === 'object' ? stockState : {},
+                dailyPrices: dailyPrices && typeof dailyPrices === 'object' ? dailyPrices : {},
                 cardMeta: readStoredJSON(`mojam_cardmeta_${currentActiveDate}`, {}),
                 chatMessages: Array.isArray(mojamChatMessages) ? mojamChatMessages : []
             };
@@ -4331,6 +4333,11 @@ function buildSeparateThermalTemplate(inv){
                 if (typeof window.ensureUniqueInvoiceNumber === 'function') window.ensureUniqueInvoiceNumber();
                 dailyExpenses = Array.isArray(data.expenses) ? data.expenses : [];
                 stockState = data.stock && typeof data.stock === 'object' ? data.stock : stockState;
+                if (data.dailyPrices && typeof data.dailyPrices === 'object') {
+                    dailyPrices = data.dailyPrices;
+                    safeSetItem('mojam_daily_prices', JSON.stringify(dailyPrices));
+                    if (typeof loadSavedDailyPrices === 'function') loadSavedDailyPrices();
+                }
                 incomingCards = Array.isArray(data.incomingCards) ? data.incomingCards : [];
                 mojamChatMessages = Array.isArray(data.chatMessages) ? data.chatMessages : readStoredJSON('mojam_chat_messages_v1', []);
                 safeSetItem(`mojam_returns_${currentActiveDate}`, JSON.stringify(returnsData));
@@ -4819,22 +4826,22 @@ function buildSeparateThermalTemplate(inv){
                 const res = await api('/api/ai/models');
                 const json = await res.json().catch(() => ({}));
                 const models = Array.isArray(json.models) ? json.models : (Array.isArray(json.data) ? json.data : []);
-                if (res.ok && json.success && models.some(model => model.id === 'gemini-3.5-flash-lite')) {
+                const defaultModel = String(json.defaultModel || models[0]?.id || 'gemini-3.5-flash-lite');
+                const activeModel = models.find(model => model.id === defaultModel);
+                if (res.ok && json.success && activeModel) {
                     liveAIModels = models;
                     select.innerHTML = '';
                     models.forEach(model => {
                         const option = document.createElement('option');
                         option.value = model.id;
-                        option.textContent = model.id === 'gemini-3.5-flash-lite'
-                            ? 'زوع — مبني على Gemini 3.5 Flash Lite'
-                            : (model.name || model.id);
+                        option.textContent = `زوع — مبني على ${model.name || model.id}`;
                         select.appendChild(option);
                     });
-                    select.value = 'gemini-3.5-flash-lite';
+                    select.value = defaultModel;
                     if (status) {
                         status.textContent = json.configured === false
                             ? 'النموذج مختار، لكن الخادم يحتاج GEMINI_API_KEY في Render.'
-                            : 'النموذج المحدد: Gemini 3.5 Flash Lite.';
+                            : `النموذج المحدد: ${activeModel.name || activeModel.id}.`;
                         status.className = `mt-1 text-[10px] ${json.configured === false ? 'text-amber-700' : 'text-emerald-700'}`;
                     }
                     updateSelectedModelDisplay();
@@ -4855,7 +4862,10 @@ function buildSeparateThermalTemplate(inv){
 
         function updateSelectedModelDisplay() {
             const header = document.getElementById('headerModelName');
-            if (header) header.textContent = 'زوع (Gemini 3.5 Flash Lite)';
+            const select = document.getElementById('aiModelSelect');
+            const selectedText = select?.options[select.selectedIndex]?.text || 'زوع — مبني على Gemini 3.5 Flash Lite';
+            const modelName = selectedText.includes('—') ? selectedText.split('—').slice(1).join('—').replace(/^\s*مبني على\s*/, '').trim() : selectedText;
+            if (header) header.textContent = `زوع (${modelName})`;
         }
 
         // 4. جلب رسائل SMS (GET /api/sms/messages)
@@ -4985,8 +4995,6 @@ function buildSeparateThermalTemplate(inv){
             const phone = cleanPhone(msg.address || msg.number || "");
             const customer = findCustomerByPhone(phone);
             const name = customer ? customer.name : "العميل";
-            const debt = customer?.crates_balance?.remaining_debt || 0;
-            const boxes = customer?.crates_balance?.total_delivered || 0;
             const reqNumbers = (document.getElementById('aiRequiredNumbers')?.value || "")
                 .split(',').map(v => v.trim()).filter(Boolean);
             const payload = {
@@ -4997,9 +5005,7 @@ function buildSeparateThermalTemplate(inv){
                 dialect: document.getElementById('aiDialectSelect')?.value || "yemeni_neutral",
                 responseFormat: document.getElementById('aiLengthSelect')?.value || "مختصر",
                 responseRules: document.getElementById('aiCustomRules')?.value || "",
-                responseNumbers: reqNumbers,
-                remainingDebt: debt,
-                deliveredCrates: boxes
+                responseNumbers: reqNumbers
             };
 
             try {
@@ -5040,8 +5046,6 @@ function buildSeparateThermalTemplate(inv){
             txt.innerText = "زوع يفكر...";
 
             const phone = cleanPhone(selectedChatPhone);                                                     const name = selectedCustomerObj ? selectedCustomerObj.name : "العميل";
-            const debt = selectedCustomerObj?.crates_balance?.remaining_debt || 0;
-            const boxes = selectedCustomerObj?.crates_balance?.total_delivered || 0;             
             const realModelId = document.getElementById('aiModelSelect').value || "gemini-3.5-flash-lite";                                                                                                    const dialect = document.getElementById('aiDialectSelect').value || "yemeni_neutral";
             const length = document.getElementById('aiLengthSelect').value || "مختصر";
             const rules = document.getElementById('aiCustomRules').value || "";                              const reqNumbers = document.getElementById('aiRequiredNumbers').value.split(',').map(s => s.trim()).filter(Boolean);                                                                  
@@ -5053,9 +5057,7 @@ function buildSeparateThermalTemplate(inv){
                 dialect: dialect,
                 responseFormat: length,
                 responseRules: rules,
-                responseNumbers: reqNumbers,
-                remainingDebt: debt,
-                deliveredCrates: boxes
+                responseNumbers: reqNumbers
             };                                                                                   
             try {
                 const res = await apiWithSession('/api/chat', { method: 'POST',

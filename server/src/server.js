@@ -8,14 +8,16 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { MongoClient } = require('mongodb');
-const { GEMINI_MODEL_ID, GeminiApiError, generateGeminiReply } = require('./gemini');
+const { generateGeminiReply } = require('./gemini');
+const { buildBusinessContext } = require('./business-context');
 
 const PORT = Number(process.env.PORT || 10000);
 const DB_NAME = process.env.MONGODB_DB || 'mojam_office';
 const MONGODB_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'development-only-change-me';
 const ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID || 'mojam-main';
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const app = express();
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -182,8 +184,9 @@ app.post('/api/zoe', async (req, res) => {
 });
 
 app.get('/api/ai/models', (req, res) => {
-  const models = [{ id: GEMINI_MODEL_ID, name: 'Gemini 3.5 Flash Lite', provider: 'Google Gemini', active: true }];
-  res.json({ success: true, models, data: models, configured: Boolean(GEMINI_API_KEY) });
+  const knownNames = { 'gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite', 'gemini-3.5-flash': 'Gemini 3.5 Flash' };
+  const models = [{ id: GEMINI_MODEL, name: knownNames[GEMINI_MODEL] || GEMINI_MODEL, provider: 'Google Gemini', active: true }];
+  res.json({ success: true, models, data: models, defaultModel: GEMINI_MODEL, configured: Boolean(GEMINI_API_KEY) });
 });
 app.get('/api/automation', async (req, res) => res.json({ success: true, data: await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID }) || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true } }));
 app.put('/api/automation', auth(), admin, async (req, res) => { const data = { ...req.body, account_id: ACCOUNT_ID, updated_at: now() }; await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true }); res.json({ success: true, data }); });
@@ -205,31 +208,37 @@ app.post('/api/chat', auth(), async (req, res) => {
   const message = String(req.body.message || '').trim();
   if (!message) return res.status(400).json({ success: false, error: 'MESSAGE_REQUIRED', message: 'اكتب رسالة العميل أولاً.' });
   if (message.length > 5000) return res.status(413).json({ success: false, error: 'MESSAGE_TOO_LONG', message: 'الرسالة أطول من الحد المسموح به.' });
-  if (req.body.model && req.body.model !== GEMINI_MODEL_ID) {
-    return res.status(400).json({ success: false, error: 'UNSUPPORTED_MODEL', message: 'النموذج المعتمد هو زوع — Gemini 3.5 Flash Lite.' });
+  if (req.body.model && req.body.model !== GEMINI_MODEL) {
+    return res.status(400).json({ success: false, error: 'UNSUPPORTED_MODEL', message: `النموذج المضبوط على الخادم هو ${GEMINI_MODEL}.` });
   }
   if (!GEMINI_API_KEY) {
     return res.status(503).json({ success: false, error: 'AI_PROVIDER_NOT_CONFIGURED', message: 'لم يُضف مفتاح Gemini إلى متغيرات الخادم بعد. أضف GEMINI_API_KEY في Render ثم أعد النشر.' });
   }
   try {
+    let businessContext;
+    try {
+      businessContext = await buildBusinessContext(db, ACCOUNT_ID, { phone: req.body.phone, message });
+    } catch (contextError) {
+      console.error('[AI] MongoDB context lookup failed:', { code: contextError.code || 'BUSINESS_CONTEXT_LOOKUP_FAILED' });
+      businessContext = { text: 'تعذر جلب حقائق قاعدة البيانات لهذا الطلب؛ لا تخمّن أي سعر أو مخزون أو رصيد.', customerName: '', customerLookupAttempted: false };
+    }
     const generated = await generateGeminiReply({
       message,
-      name: req.body.name,
+      name: businessContext.customerName || (businessContext.customerLookupAttempted ? 'العميل' : req.body.name),
       dialect: req.body.dialect,
       responseFormat: req.body.responseFormat,
       responseRules: req.body.responseRules,
       responseNumbers: req.body.responseNumbers,
-      remainingDebt: req.body.remainingDebt ?? req.body.debt,
-      deliveredCrates: req.body.deliveredCrates ?? req.body.boxes
-    }, { apiKey: GEMINI_API_KEY });
-    return res.json({ success: true, reply: generated.reply, model: generated.model, provider: 'google-gemini', fallback: false, usage: generated.usage });
+      trustedContext: businessContext.text
+    }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
+    return res.json({ success: true, reply: generated.reply, model: generated.model, provider: 'google-gemini', fallback: false, contextDate: businessContext.date || null, usage: generated.usage });
   } catch (error) {
     const providerStatus = Number(error.status) || 502;
     console.error('[AI] Gemini request failed:', { status: providerStatus, code: error.code || 'GEMINI_UPSTREAM_ERROR' });
     let message = 'تعذر الاتصال بنموذج Gemini. حاول مرة أخرى لاحقًا.';
     if (providerStatus === 400) message = 'رفض Gemini صيغة الطلب. تحقق من الرسالة والإعدادات ثم أعد المحاولة.';
     else if (providerStatus === 401 || providerStatus === 403) message = 'مفتاح Gemini غير صالح أو غير مخوّل للمشروع. راجع GEMINI_API_KEY وقيود المفتاح في Google AI Studio.';
-    else if (providerStatus === 404) message = 'لم يتعرف Gemini على معرّف النموذج. استخدم gemini-3.5-flash-lite وتحقق من إتاحة Gemini API للمشروع.';
+    else if (providerStatus === 404) message = `لم يتعرف Gemini على النموذج ${GEMINI_MODEL}. تحقق من GEMINI_MODEL وإتاحة النموذج للمشروع.`;
     else if (providerStatus === 429) message = 'تم تجاوز حصة Gemini أو حد الطلبات. تحقق من الحصة في Google AI Studio ثم أعد المحاولة.';
     else if (error.code === 'GEMINI_TIMEOUT') message = 'انتهت مهلة الاتصال بـGemini. حاول مرة أخرى.';
     else if (error.code === 'GEMINI_NETWORK_ERROR') message = 'تعذر الوصول إلى Gemini من الخادم. تحقق من اتصال Render ثم أعد المحاولة.';
