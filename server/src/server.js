@@ -19,6 +19,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'development-only-change-me';
 const ACCOUNT_ID = process.env.DEFAULT_ACCOUNT_ID || 'mojam-main';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const SMS_GATEWAY_TOKEN = process.env.SMS_GATEWAY_TOKEN || '';
 const app = express();
 app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -53,7 +54,8 @@ function auth(required = true) {
       const token = header.startsWith('Bearer ') ? header.slice(7) : null;
       if (!token) { if (!required) return next(); return res.status(401).json({ success: false, error: 'AUTH_REQUIRED' }); }
       const payload = jwt.verify(token, JWT_SECRET);
-      const session = await db.collection('user_sessions').findOne({ token_hash: hashToken(token), user_id: payload.sub, revoked_at: null });
+      const tokenHash = hashToken(token);
+      const session = await db.collection('user_sessions').findOne({ user_id: payload.sub, revoked_at: null, $or: [{ token_hash: tokenHash }, { background_access_hash: tokenHash }] });
       const user = await db.collection('users').findOne({ id: payload.sub, account_id: ACCOUNT_ID });
       if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
       if (!session || !user || user.status !== 'active' || (user.expires_at && new Date(user.expires_at) < now())) return res.status(401).json({ success: false, error: 'SESSION_REVOKED' });
@@ -64,6 +66,84 @@ function auth(required = true) {
   };
 }
 function admin(req, res, next) { if (!req.user || !(req.user.roles || []).some(r => ['admin','owner'].includes(r))) return res.status(403).json({ success: false, error: 'ADMIN_REQUIRED' }); next(); }
+function phoneGatewayAuth(req, res, next) {
+  if (!SMS_GATEWAY_TOKEN) return res.status(503).json({ success: false, error: 'SMS_GATEWAY_NOT_CONFIGURED', message: 'أضف SMS_GATEWAY_TOKEN إلى متغيرات الخادم أولاً.' });
+  const header = String(req.headers.authorization || '');
+  const supplied = Buffer.from(header.startsWith('Bearer ') ? header.slice(7) : '');
+  const expected = Buffer.from(SMS_GATEWAY_TOKEN);
+  if (!supplied.length || supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    return res.status(401).json({ success: false, error: 'GATEWAY_UNAUTHORIZED' });
+  }
+  next();
+}
+
+async function storeSmsBatch(messages, source = 'android-phone-gateway') {
+  const operations = [];
+  for (const item of messages) {
+    const rawPhone = String(item?.address || item?.number || item?.from || item?.phone || item?.phone_normalized || '').trim();
+    const phone = normPhone(rawPhone);
+    const body = String(item?.body || item?.message || '').trim().slice(0, 5000);
+    if (!phone || !body) continue;
+    const rawDate = item?.date || item?.received_at || item?.created_at || item?.received || '';
+    let timeValue = typeof rawDate === 'number' ? rawDate : (/^\d{11,13}$/.test(String(rawDate)) ? Number(rawDate) : Date.parse(rawDate));
+    if (!Number.isFinite(timeValue) || timeValue <= 0) timeValue = now().getTime();
+    const createdAt = new Date(timeValue);
+    const rawDirection = String(item?.direction || item?.type || '').toLowerCase();
+    const type = Number(item?.type || 1);
+    const direction = ['outbound','sent','out','outbox','2','4'].includes(rawDirection) || type === 2 || type === 4 ? 'outbound' : 'inbound';
+    const externalKey = crypto.createHash('sha256').update(`${ACCOUNT_ID}\0${phone}\0${direction}\0${createdAt.getTime()}\0${body}`).digest('hex');
+    const row = { id: externalKey, external_key: externalKey, account_id: ACCOUNT_ID, phone_normalized: phone, address: rawPhone || phone, number: rawPhone || phone, body, direction, type: direction === 'inbound' ? 1 : 2, date: createdAt, received_at: createdAt, created_at: createdAt, gateway_received_at: now(), source };
+    operations.push({ row, update: { updateOne: { filter: { account_id: ACCOUNT_ID, external_key: externalKey }, update: { $setOnInsert: row }, upsert: true } } });
+  }
+  if (!operations.length) return { received: messages.length, accepted: 0, inserted: 0, insertedRows: [] };
+  const result = await db.collection('sms_messages').bulkWrite(operations.map(item => item.update), { ordered: true });
+  const ids = result.upsertedIds || {};
+  const insertedIndexes = new Set(Object.keys(ids).map(Number));
+  const insertedRows = operations.filter((_, index) => insertedIndexes.has(index)).map(item => item.row);
+  return { received: messages.length, accepted: operations.length, inserted: result.upsertedCount || insertedRows.length, insertedRows };
+}
+
+async function processGatewayAutoReply(message) {
+  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  if (!(settings?.autoGenerate ?? settings?.auto_generate) || !GEMINI_API_KEY) return { status: 'disabled' };
+  const receivedAt = new Date(message.gateway_received_at || message.received_at || message.date || now());
+  const enabledAt = settings.auto_generate_since ? new Date(settings.auto_generate_since) : null;
+  if (enabledAt && receivedAt < enabledAt) return { status: 'before_enabled' };
+  if (settings.allowedContactsOnly ?? settings.allowed_contacts_only) {
+    const phones = settings.allowedPhones ?? settings.allowed_phones;
+    const allowed = (Array.isArray(phones) ? phones : []).map(normPhone);
+    if (!allowed.includes(normPhone(message.phone_normalized))) return { status: 'not_allowed' };
+  }
+  try {
+    const context = await buildBusinessContext(db, ACCOUNT_ID, { phone: message.phone_normalized, message: message.body });
+    const generated = await generateGeminiReply({
+      message: message.body,
+      name: context.customerName || 'العميل',
+      dialect: settings.dialect || 'yemeni_neutral',
+      responseFormat: settings.responseFormat || 'مختصر',
+      responseRules: settings.responseRules || '',
+      responseNumbers: Array.isArray(settings.responseNumbers) ? settings.responseNumbers : [],
+      trustedContext: context.text
+    }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
+    const sendAutomatically = Boolean(settings.autoSend ?? settings.auto_send);
+    const gatewayReady = Boolean(SMS_GATEWAY_TOKEN);
+    const reply = {
+      id: id(), account_id: ACCOUNT_ID, phone_normalized: message.phone_normalized,
+      direction: 'outbound', body: generated.reply, message: generated.reply,
+      source: 'zoe-server-automation', model: generated.model,
+      reply_to: message.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(),
+      send_status: sendAutomatically ? (gatewayReady ? 'queued' : 'failed') : 'draft',
+      error_message: sendAutomatically && !gatewayReady ? 'SMS_GATEWAY_NOT_CONFIGURED' : null
+    };
+    await db.collection('conversation_messages').insertOne(reply);
+    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: message.external_key }, { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id } });
+    return { status: reply.send_status };
+  } catch (error) {
+    console.error('[SMS GATEWAY] automatic reply failed:', { code: error.code || 'AUTO_REPLY_FAILED' });
+    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: message.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: error.code || 'AUTO_REPLY_FAILED' } });
+    return { status: 'error' };
+  }
+}
 
 app.get('/api/health', async (req, res) => {
   try { await db.command({ ping: 1 }); res.json({ success: true, status: 'ok', database: 'connected', time: now().toISOString() }); }
@@ -79,9 +159,30 @@ app.post('/api/auth/login', async (req, res) => {
   if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
   if (!user || !password || !(await bcrypt.compare(password, user.password_hash)) || user.status !== 'active') return res.status(401).json({ success: false, error: 'INVALID_LOGIN' });
   const token = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
-  await db.collection('user_sessions').insertOne({ id: id(), user_id: user.id, account_id: ACCOUNT_ID, token_hash: hashToken(token), device_id: req.body.deviceId || null, created_at: now(), last_seen_at: now(), expires_at: new Date(Date.now() + 30 * 60 * 1000), revoked_at: null });
+  const backgroundToken = crypto.randomBytes(32).toString('hex');
+  await db.collection('user_sessions').insertOne({ id: id(), user_id: user.id, account_id: ACCOUNT_ID, token_hash: hashToken(token), background_token_hash: hashToken(backgroundToken), background_expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), device_id: req.body.deviceId || null, created_at: now(), last_seen_at: now(), expires_at: new Date(Date.now() + 30 * 60 * 1000), revoked_at: null });
   await db.collection('users').updateOne({ id: user.id }, { $set: { last_login_at: now(), failed_login_count: 0 } });
-  res.json({ success: true, accessToken: token, user: publicUser(user) });
+  res.json({ success: true, accessToken: token, backgroundToken, user: publicUser(user) });
+});
+app.post('/api/auth/background-token', auth(), async (req, res) => {
+  const currentToken = String(req.headers.authorization || '').slice(7);
+  const currentHash = hashToken(currentToken);
+  const session = await db.collection('user_sessions').findOne({ user_id: req.user.id, revoked_at: null, $or: [{ token_hash: currentHash }, { background_access_hash: currentHash }] });
+  if (!session) return res.status(401).json({ success: false, error: 'SESSION_REVOKED' });
+  const backgroundToken = crypto.randomBytes(32).toString('hex');
+  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_token_hash: hashToken(backgroundToken), background_expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) } });
+  res.json({ success: true, backgroundToken });
+});
+app.post('/api/auth/background-refresh', async (req, res) => {
+  const backgroundToken = String(req.body?.backgroundToken || '');
+  if (!/^[a-f0-9]{64}$/.test(backgroundToken)) return res.status(401).json({ success: false, error: 'BACKGROUND_TOKEN_INVALID' });
+  const session = await db.collection('user_sessions').findOne({ background_token_hash: hashToken(backgroundToken), revoked_at: null, background_expires_at: { $gt: now() } });
+  if (!session) return res.status(401).json({ success: false, error: 'BACKGROUND_SESSION_EXPIRED' });
+  const user = await db.collection('users').findOne({ id: session.user_id, account_id: ACCOUNT_ID, status: 'active' });
+  if (!user) return res.status(403).json({ success: false, error: 'USER_BLOCKED' });
+  const accessToken = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
+  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_access_hash: hashToken(accessToken), background_access_expires_at: new Date(Date.now() + 30 * 60 * 1000), last_background_seen_at: now() } });
+  res.json({ success: true, accessToken });
 });
 app.post('/api/auth/logout', auth(), async (req, res) => { const token = req.headers.authorization.slice(7); await db.collection('user_sessions').updateOne({ token_hash: hashToken(token) }, { $set: { revoked_at: now(), revoke_reason: 'logout' } }); res.json({ success: true }); });
 app.get('/api/auth/me', auth(), (req, res) => res.json({ success: true, user: publicUser(req.user) }));
@@ -198,19 +299,182 @@ app.post('/api/invoices/next-number', auth(), async (req, res) => {
     return res.status(503).json({ success: false, error: 'INVOICE_NUMBER_UNAVAILABLE', message: 'تعذر حجز رقم فاتورة فريد الآن. تحقق من الاتصال ثم أعد المحاولة.' });
   }
 });
-app.get('/api/automation', async (req, res) => res.json({ success: true, data: await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID }) || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true } }));
-app.put('/api/automation', auth(), admin, async (req, res) => { const data = { ...req.body, account_id: ACCOUNT_ID, updated_at: now() }; await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true }); res.json({ success: true, data }); });
-
-app.get('/api/sms/messages', async (req, res) => res.json({ success: true, data: await db.collection('sms_messages').find({ account_id: ACCOUNT_ID }).sort({ received_at: -1 }).limit(Number(req.query.limit || 100)).toArray() }));
-app.post('/api/sms/send', auth(), async (req, res) => {
-  const phone = normPhone(req.body.phone); const message = String(req.body.message || '').trim();
-  if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
-  const row = { id: id(), account_id: ACCOUNT_ID, phone_normalized: phone, body: message, direction: 'outbound', send_status: process.env.SMS_PROVIDER_URL ? 'queued' : 'failed', error_message: process.env.SMS_PROVIDER_URL ? null : 'SMS_PROVIDER_NOT_CONFIGURED', created_at: now() };
-  await db.collection('conversation_messages').insertOne(row);
-  res.status(process.env.SMS_PROVIDER_URL ? 202 : 503).json({ success: Boolean(process.env.SMS_PROVIDER_URL), data: row, error: row.error_message });
+app.get('/api/automation', auth(), async (req, res) => {
+  const stored = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  const data = stored || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true };
+  const serverAutomationActive = Boolean(GEMINI_API_KEY && (stored?.autoGenerate ?? stored?.auto_generate));
+  res.json({ success: true, configured: Boolean(stored), gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive, data });
 });
-app.get('/api/conversations/:phone', async (req, res) => res.json({ success: true, data: await db.collection('conversation_messages').find({ account_id: ACCOUNT_ID, phone_normalized: normPhone(req.params.phone) }).sort({ created_at: 1 }).limit(Number(req.query.limit || 50)).toArray() }));
-app.post('/api/conversations', async (req, res) => { const row = { ...req.body, id: id(), account_id: ACCOUNT_ID, phone_normalized: normPhone(req.body.phone || req.body.phone_normalized), created_at: now() }; await db.collection('conversation_messages').insertOne(row); res.status(201).json({ success: true, data: row }); });
+app.put('/api/automation', auth(), admin, async (req, res) => {
+  const allowed = ['allowedContactsOnly','allowedPhones','autoGenerate','autoSend','localFallback','refreshSeconds','simSlotIndex','model','dialect','responseFormat','responseRules','responseNumbers'];
+  const previous = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  const data = { account_id: ACCOUNT_ID, updated_at: now() };
+  for (const key of allowed) if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) data[key] = req.body[key];
+  const nextAutoGenerate = data.autoGenerate ?? previous?.autoGenerate ?? previous?.auto_generate ?? false;
+  const previousAutoGenerate = previous?.autoGenerate ?? previous?.auto_generate ?? false;
+  if (nextAutoGenerate && (!previousAutoGenerate || !previous?.auto_generate_since)) data.auto_generate_since = now();
+  await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true });
+  const saved = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  res.json({ success: true, configured: true, gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive: Boolean(GEMINI_API_KEY && nextAutoGenerate), data: saved });
+});
+
+// Android SMS_RECEIVED events are processed by the cloud; the Android app remains the SMS transport.
+app.post('/api/sms/native/inbound', auth(), async (req, res) => {
+  const phone = String(req.body?.phone || req.body?.address || '').trim();
+  const body = String(req.body?.body || '').trim().slice(0, 5000);
+  const date = Number(req.body?.timestamp) || Date.now();
+  if (!phone || !body) return res.status(400).json({ success: false, error: 'PHONE_AND_BODY_REQUIRED' });
+  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  if (!(settings?.autoGenerate ?? settings?.auto_generate)) return res.json({ success: true, generated: false, reason: 'AUTO_GENERATE_DISABLED' });
+  const stored = await storeSmsBatch([{ phone, body, date, direction: 'inbound' }], 'android-native-background');
+  if (!stored.insertedRows.length) return res.json({ success: true, duplicate: true, generated: false });
+  const inbound = stored.insertedRows[0];
+  if (!GEMINI_API_KEY) return res.status(503).json({ success: false, error: 'AI_PROVIDER_NOT_CONFIGURED' });
+  const receivedAt = new Date(inbound.received_at || inbound.date || now());
+  const enabledAt = settings.auto_generate_since ? new Date(settings.auto_generate_since) : null;
+  if (enabledAt && receivedAt < enabledAt) return res.json({ success: true, generated: false, reason: 'BEFORE_AUTOMATION_ENABLED' });
+  if (settings.allowedContactsOnly ?? settings.allowed_contacts_only) {
+    const allowed = (Array.isArray(settings.allowedPhones ?? settings.allowed_phones) ? (settings.allowedPhones ?? settings.allowed_phones) : []).map(normPhone);
+    if (!allowed.includes(normPhone(inbound.phone_normalized))) return res.json({ success: true, generated: false, reason: 'CONTACT_NOT_ALLOWED' });
+  }
+  try {
+    const context = await buildBusinessContext(db, ACCOUNT_ID, { phone: inbound.phone_normalized, message: inbound.body });
+    const generated = await generateGeminiReply({
+      message: inbound.body,
+      name: context.customerName || 'العميل',
+      dialect: settings.dialect || 'yemeni_neutral',
+      responseFormat: settings.responseFormat || 'مختصر',
+      responseRules: settings.responseRules || '',
+      responseNumbers: Array.isArray(settings.responseNumbers) ? settings.responseNumbers : [],
+      trustedContext: context.text
+    }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
+    const shouldSend = Boolean(settings.autoSend ?? settings.auto_send);
+    const reply = { id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized, direction: 'outbound', body: generated.reply, message: generated.reply, source: 'zoe-native-background', model: generated.model, reply_to: inbound.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(), send_status: shouldSend ? 'queued' : 'draft' };
+    await db.collection('conversation_messages').insertOne(reply);
+    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id } });
+    return res.json({ success: true, generated: true, queued: shouldSend, draft: !shouldSend, replyId: reply.id });
+  } catch (error) {
+    console.error('[SMS NATIVE] automatic generation failed:', { code: error.code || 'AUTO_REPLY_FAILED' });
+    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: error.code || 'AUTO_REPLY_FAILED' } });
+    return res.status(502).json({ success: false, error: error.code || 'AUTO_REPLY_FAILED' });
+  }
+});
+app.get('/api/sms/native/outbox/next', auth(), async (req, res) => {
+  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  if (!(settings?.autoGenerate ?? settings?.auto_generate) || !(settings?.autoSend ?? settings?.auto_send)) {
+    await db.collection('conversation_messages').updateMany(
+      { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+      { $set: { send_status: 'draft', error_message: 'AUTO_SEND_DISABLED' } }
+    );
+    return res.json({ success: true, message: null });
+  }
+  const result = await db.collection('conversation_messages').findOneAndUpdate(
+    { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+    { $set: { send_status: 'sending', claimed_at: now(), native_device_id: String(req.query.deviceId || 'android').slice(0, 100) } },
+    { sort: { created_at: 1 }, returnDocument: 'after' }
+  );
+  const message = result?.value || result || null;
+  res.json({ success: true, message });
+});
+app.post('/api/sms/native/outbox/:id/result', auth(), async (req, res) => {
+  const status = String(req.body?.status || '').toLowerCase();
+  if (!['submitted', 'failed'].includes(status)) return res.status(400).json({ success: false, error: 'INVALID_SEND_STATUS' });
+  const update = { send_status: status, gateway_result_at: now(), gateway_result: String(req.body?.detail || '').slice(0, 500) };
+  if (status === 'submitted') update.submitted_at = now();
+  else update.error_message = String(req.body?.error || 'SMS_SEND_FAILED').slice(0, 500);
+  const result = await db.collection('conversation_messages').updateOne({ account_id: ACCOUNT_ID, id: req.params.id, source: 'zoe-native-background', send_status: 'sending' }, { $set: update });
+  res.json({ success: true, updated: result.modifiedCount === 1 });
+});
+
+app.get('/api/sms/messages', auth(), async (req, res) => {
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 1000));
+  const messages = await db.collection('sms_messages').find({ account_id: ACCOUNT_ID }).sort({ received_at: -1 }).limit(limit).toArray();
+  res.json({ success: true, messages, data: messages });
+});
+app.post('/api/sms/sync', auth(), async (req, res) => {
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (messages.length > 500) return res.status(413).json({ success: false, error: 'SMS_SYNC_BATCH_TOO_LARGE', message: 'أرسل الرسائل على دفعات لا تتجاوز 500 رسالة.' });
+  const result = await storeSmsBatch(messages, 'android-app-sync');
+  res.json({ success: true, received: result.received, accepted: result.accepted, inserted: result.inserted });
+});
+app.post('/api/sms/gateway/inbound', phoneGatewayAuth, async (req, res) => {
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (!messages.length) return res.json({ success: true, received: 0, accepted: 0, inserted: 0, generated: 0 });
+  if (messages.length > 200) return res.status(413).json({ success: false, error: 'SMS_SYNC_BATCH_TOO_LARGE', message: 'أرسل دفعات لا تتجاوز 200 رسالة.' });
+  const result = await storeSmsBatch(messages, 'android-phone-gateway');
+  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  let autoSince = settings?.auto_generate_since ? new Date(settings.auto_generate_since) : null;
+  if ((settings?.autoGenerate ?? settings?.auto_generate) && !autoSince) {
+    autoSince = now();
+    await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: { auto_generate_since: autoSince } });
+  }
+  const eligible = (settings?.autoGenerate ?? settings?.auto_generate) && GEMINI_API_KEY
+    ? result.insertedRows.filter(row => row.direction === 'inbound' && (!autoSince || new Date(row.received_at) >= autoSince))
+    : [];
+  const processed = [];
+  for (let offset = 0; offset < eligible.length; offset += 3) {
+    processed.push(...await Promise.all(eligible.slice(offset, offset + 3).map(row => processGatewayAutoReply(row))));
+  }
+  res.json({ success: true, received: result.received, accepted: result.accepted, inserted: result.inserted, autoReplyEligible: eligible.length, autoReplyProcessed: processed.length, autoReplyStatuses: processed.map(item => item.status) });
+});
+app.get('/api/sms/gateway/outbox/next', phoneGatewayAuth, async (req, res) => {
+  const deviceId = String(req.query.deviceId || 'android-phone').slice(0, 100);
+  const staleBefore = new Date(Date.now() - 3 * 60 * 1000);
+  const result = await db.collection('conversation_messages').findOneAndUpdate(
+    { account_id: ACCOUNT_ID, $or: [{ send_status: 'queued' }, { send_status: 'sending', claimed_at: { $lt: staleBefore } }] },
+    { $set: { send_status: 'sending', claimed_at: now(), gateway_device_id: deviceId } },
+    { sort: { created_at: 1 }, returnDocument: 'after' }
+  );
+  const message = result?.value || result || null;
+  res.json({ success: true, message: message && message.send_status === 'sending' ? message : null });
+});
+app.post('/api/sms/gateway/outbox/:id/result', phoneGatewayAuth, async (req, res) => {
+  const status = String(req.body?.status || '').toLowerCase();
+  if (!['sent','failed'].includes(status)) return res.status(400).json({ success: false, error: 'INVALID_SEND_STATUS' });
+  const update = { send_status: status, gateway_result_at: now(), gateway_result: String(req.body?.detail || '').slice(0, 500) };
+  if (status === 'sent') update.sent_at = now();
+  else update.error_message = String(req.body?.error || 'SMS_SEND_FAILED').slice(0, 500);
+  const result = await db.collection('conversation_messages').updateOne({ account_id: ACCOUNT_ID, id: req.params.id, send_status: 'sending' }, { $set: update });
+  res.json({ success: true, updated: result.modifiedCount === 1 });
+});
+app.post('/api/sms/send', auth(), async (req, res) => {
+  const phone = normPhone(req.body.phone); const message = String(req.body.message || '').trim().slice(0, 5000);
+  if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
+  if (!SMS_GATEWAY_TOKEN) return res.status(503).json({ success: false, error: 'SMS_GATEWAY_NOT_CONFIGURED', message: 'بوابة الهاتف غير متصلة. أضف SMS_GATEWAY_TOKEN وشغّل بوابة Termux.' });
+  const row = { id: id(), account_id: ACCOUNT_ID, phone_normalized: phone, body: message, message, direction: 'outbound', sim_slot_index: Math.max(0, Number(req.body.simSlotIndex) || 0), send_status: 'queued', created_at: now() };
+  await db.collection('conversation_messages').insertOne(row);
+  res.status(202).json({ success: true, queued: true, archived: true, message: 'أُضيفت الرسالة إلى طابور هاتف SMS.', data: row });
+});
+app.get('/api/conversations/:phone', auth(), async (req, res) => {
+  const phone = normPhone(req.params.phone);
+  const limit = Math.max(1, Math.min(Number(req.query.limit) || 1000, 5000));
+  const [smsRows, conversationRows] = await Promise.all([
+    db.collection('sms_messages').find({ account_id: ACCOUNT_ID, phone_normalized: phone }).sort({ received_at: 1 }).limit(limit).toArray(),
+    db.collection('conversation_messages').find({ account_id: ACCOUNT_ID, phone_normalized: phone }).sort({ created_at: 1 }).limit(limit).toArray()
+  ]);
+  const merged = [...smsRows, ...conversationRows].map(row => {
+    const body = String(row.body || row.message || row.reply || '');
+    const direction = row.direction || (Number(row.type) === 2 || Number(row.type) === 4 ? 'outbound' : 'inbound');
+    const createdAt = row.created_at || row.received_at || row.date || row.createdAt || now();
+    return { ...row, message: body, body, direction, created_at: createdAt, createdAt };
+  }).filter(row => row.message);
+  const unique = new Map();
+  for (const row of merged) {
+    const time = new Date(row.created_at).getTime() || 0;
+    const key = row.external_key || `${row.direction}\0${time}\0${row.message}`;
+    if (!unique.has(key)) unique.set(key, row);
+  }
+  const conversations = [...unique.values()].sort((a, b) => (new Date(a.created_at).getTime() || 0) - (new Date(b.created_at).getTime() || 0));
+  res.json({ success: true, conversations, data: conversations });
+});
+app.post('/api/conversations', auth(), async (req, res) => {
+  const phone = normPhone(req.body.phone || req.body.phone_normalized);
+  const message = String(req.body.message || req.body.body || '').trim().slice(0, 5000);
+  if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
+  const row = { ...req.body, id: id(), account_id: ACCOUNT_ID, phone_normalized: phone, body: message, message, created_at: now() };
+  await db.collection('conversation_messages').insertOne(row);
+  res.status(201).json({ success: true, data: row });
+});
 
 app.get('/api/sync/day', async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
 app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
@@ -268,7 +532,11 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../../public/index
 
 async function start() {
   if (!MONGODB_URI) throw new Error('MONGODB_URI or MONGO_URI is required');
-  mongo = new MongoClient(MONGODB_URI); await mongo.connect(); db = mongo.db(DB_NAME); await ensureBaseData();
+  mongo = new MongoClient(MONGODB_URI); await mongo.connect(); db = mongo.db(DB_NAME);
+  await db.collection('sms_messages').createIndex({ account_id: 1, external_key: 1 }, { unique: true, partialFilterExpression: { external_key: { $type: 'string' } }, name: 'sms_external_key_unique' });
+  await db.collection('sms_messages').createIndex({ account_id: 1, phone_normalized: 1, received_at: 1 }, { name: 'sms_conversation_history' });
+  await db.collection('conversation_messages').createIndex({ account_id: 1, phone_normalized: 1, created_at: 1 }, { name: 'conversation_history' });
+  await ensureBaseData();
   app.listen(PORT, '0.0.0.0', () => console.log(`Mojam server listening on ${PORT}`));
 }
 start().catch(err => { console.error(err); process.exit(1); });
