@@ -4942,23 +4942,36 @@ function buildSeparateThermalTemplate(inv){
 
         // 4. جلب رسائل SMS (GET /api/sms/messages)
         async function fetchSMSMessages() {
+            const wasInitialized = smsAutoInitialized;
             try {
                 const previousIds = new Set(liveMessages.map(m => String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`)));
                 const messages = await window.smsProvider.list(1000);
                 liveMessages = Array.isArray(messages) ? messages : [];
-                liveMessages.sort((a, b) => {
-                    return smsMessageTime(b) - smsMessageTime(a);
-                });
+                liveMessages.sort((a, b) => smsMessageTime(b) - smsMessageTime(a));
                 try { await archiveSmsMessages(liveMessages); }
                 catch (archiveError) { console.warn('تعذر مزامنة بعض الرسائل مع MongoDB:', archiveError); }
-                if (smsAutoInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive) {
-                    const newMessages = liveMessages.filter(m => {
-                        const id = String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`);
-                        return !previousIds.has(id) && smsMessageDirection(m) === 'inbound';
-                    });
-                    for (const msg of newMessages.reverse()) {
-                        await autoGenerateForIncomingSms(msg);
-                    }
+                const newMessages = liveMessages.filter(m => {
+                    const id = String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`);
+                    return !previousIds.has(id) && smsMessageDirection(m) === 'inbound';
+                });
+                if (wasInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive) {
+                    for (const msg of newMessages) await autoGenerateForIncomingSms(msg);
+                }
+                if (wasInitialized && selectedChatPhone && document.getElementById('chatWorkspace')?.classList.contains('sms-chat-open')) {
+                    const activePhoneKey = cleanPhone(selectedChatPhone);
+                    selectedChatMessages = liveMessages.filter(message =>
+                        cleanPhone(message.address || message.number || message.phone || message.phone_normalized) === activePhoneKey
+                    );
+                    const inboundThreadMessages = selectedChatMessages
+                        .filter(message => smsMessageDirection(message) === 'inbound')
+                        .sort((a, b) => smsMessageTime(a) - smsMessageTime(b));
+                    const latestInbound = inboundThreadMessages[inboundThreadMessages.length - 1] || null;
+                    if (latestInbound) selectedChatMessage = latestInbound;
+                    await loadRealConversationHistory(
+                        selectedChatPhone,
+                        latestInbound?.body || latestInbound?.message || '',
+                        true
+                    );
                 }
                 smsAutoInitialized = true;
             } catch (err) {
@@ -5047,9 +5060,10 @@ function buildSeparateThermalTemplate(inv){
             renderSMSListUI();
         }
 
-        async function loadRealConversationHistory(phone, latestBody) {
+        async function loadRealConversationHistory(phone, latestBody, keepCurrentVisible = false) {
             const feed = document.getElementById('chatFeed');
-            feed.innerHTML = '<div class="text-center py-6 text-slate-400 text-xs">جارٍ تحميل سجل المحادثة...</div>';
+            const requestedPhoneKey = cleanPhone(phone);
+            if (!keepCurrentVisible) feed.innerHTML = '<div class="text-center py-6 text-slate-400 text-xs">جارٍ تحميل سجل المحادثة...</div>';
             let serverRows = [];
             try {
                 const response = await apiWithSession(`/api/conversations/${encodeURIComponent(cleanPhone(phone))}?limit=5000`);
@@ -5058,10 +5072,10 @@ function buildSeparateThermalTemplate(inv){
             } catch (error) {
                 console.warn('تعذر جلب السجل السحابي؛ سيُعرض سجل الرسائل الموجود على الهاتف.', error);
             }
-            const phoneKey = cleanPhone(phone);
-            const deviceRows = (Array.isArray(selectedChatMessages) ? selectedChatMessages : liveMessages.filter(message =>
+            const phoneKey = requestedPhoneKey;
+            const deviceRows = liveMessages.filter(message =>
                 cleanPhone(message.address || message.number || message.phone || message.phone_normalized) === phoneKey
-            )).map(message => ({
+            ).map(message => ({
                 ...message,
                 body: message.body || message.message || '',
                 message: message.body || message.message || '',
@@ -5083,6 +5097,7 @@ function buildSeparateThermalTemplate(inv){
                 if (!unique.has(key)) unique.set(key, { ...row, body, direction, created_at: timestamp });
             }
             const conversation = [...unique.values()].sort((a, b) => smsMessageTime(a) - smsMessageTime(b));
+            if (cleanPhone(selectedChatPhone) !== requestedPhoneKey) return;
             feed.innerHTML = '';
             if (!conversation.length) {
                 feed.innerHTML = '<div class="flex flex-col items-center justify-center h-full text-slate-400 text-xs gap-2"><i class="fa-solid fa-comments text-2xl text-slate-300"></i><span>لا توجد رسائل محفوظة لهذه المحادثة بعد.</span></div>';
