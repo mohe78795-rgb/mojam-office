@@ -381,6 +381,7 @@
       data.sellerName = String(reservation.sellerName || window.mojamCurrentUser?.name || 'غير مسجل');
       data.sellerUserId = String(reservation.sellerUserId || window.mojamCurrentUser?.id || '');
     } else {
+      // عند التعديل يُحافظ على رقم الفاتورة المحفوظ، ولا يُستهلك رقم جديد.
       data.num = old?.num || data.num;
       data.sellerName = old?.sellerName || data.sellerName || window.mojamCurrentUser?.name || 'غير مسجل';
       data.sellerUserId = old?.sellerUserId || data.sellerUserId || window.mojamCurrentUser?.id || '';
@@ -451,11 +452,62 @@
 
   window.thermalInvoiceMarkup = function (invoice) {
     const boxes = totalBoxes(invoice.items || []) || integer(invoice.emptyCratesReceived || invoice.emptyCratesTotal || invoice.crates);
+    const dots = Number(localStorage.getItem('printer_width') || localStorage.getItem('mojam_printer_width') || 576) === 384 ? 384 : 576;
+    const narrow = dots === 384;
+    const bodySize = narrow ? 22 : 29;
+    const titleSize = narrow ? 19 : 23;
+    const metaSize = narrow ? 23 : 29;
+    const numberSize = narrow ? 30 : 40;
+    const tableSize = narrow ? 22 : 28;
+    const headerSize = narrow ? 19 : 24;
+    const amountSize = narrow ? 30 : 40;
+    const signatureSize = narrow ? 19 : 24;
+    const cellPadding = narrow ? 9 : 12;
     const rows = (invoice.items || []).filter(item => num(item.qty) > 0 || lineBoxes(item) > 0).map(item => {
-      const card = cardById(sourceIdForItem(item, invoice));
-      return `<tr><td>${esc(item.name === 'جفش' ? 'جفوش' : item.name)}<br><small>${esc(item.sourceLabel || (card ? cardTitle(card) : 'المخزون العام'))}</small></td><td>${fmt(item.qty)}</td><td>${fmt(item.price)}</td><td>${fmt(item.total)}</td><td>${fmt(lineBoxes(item))}</td></tr>`;
+      const cell = `padding:${cellPadding}px 2px;border:2px solid #000;vertical-align:middle`;
+      const numeric = `${cell};font-family:Arial,sans-serif;font-size:${tableSize}px;font-weight:900;line-height:1.2`;
+      return `<tr><td style="${cell};font-size:${tableSize}px;font-weight:900;line-height:1.3;overflow-wrap:anywhere">${esc(item.name === 'جفش' ? 'جفوش' : item.name)}</td><td dir="ltr" style="${numeric}">${fmt(item.qty)}</td><td dir="ltr" style="${numeric}">${fmt(item.price)}</td><td dir="ltr" style="${numeric}">${fmt(item.total)}</td><td dir="ltr" style="${numeric}">${fmt(lineBoxes(item))}</td></tr>`;
     }).join('');
-    return `<article dir="rtl" lang="ar" style="font-family:Arial,Tahoma,sans-serif;color:#000"><h3 style="text-align:center">مكتب معجم لتسويق الدواجن</h3><div style="border-block:1px dashed #000;padding:5px;font-size:12px">فاتورة: ${esc(invoice.num || '')}<br>التاريخ: ${esc(invoice.date || '')}<br>العميل: ${esc(invoice.customer || 'مبيعات نقداً')}<br>الهاتف: ${esc(invoice.phone || '—')}</div><table style="width:100%;border-collapse:collapse;font-size:11px;text-align:center"><thead><tr><th>الصنف / الكرت</th><th>كمية</th><th>سعر</th><th>إجمالي</th><th>فارغة</th></tr></thead><tbody>${rows}</tbody></table><h3 style="text-align:center">الإجمالي: ${fmt(invoice.total)} ريال</h3><p style="font-size:11px">مجموع الصناديق الفارغة: ${fmt(boxes)}</p><p style="border-top:1px dashed #000;padding-top:5px;text-align:center;font-size:11px;font-weight:bold">البائع: ${esc(invoice.sellerName || 'غير مسجل')}</p><p style="text-align:center">شكراً لتعاملكم معنا</p></article>`;
+    const brandSize = narrow ? 25 : 32;
+    const addressSize = narrow ? 18 : 22;
+    const phoneSize = narrow ? 17 : 21;
+    const headingPadding = narrow ? 11 : 13;
+    const mastFont = addressSize;
+    const contactFont = phoneSize;
+    const officeFont = narrow ? 24 : 30;
+    const noteFont = narrow ? 18 : 22;
+    const signatureLabelFont = narrow ? 15 : 19;
+    const signatureValueFont = narrow ? 13 : 17;
+    return `<article dir="rtl" lang="ar" style="width:100%;box-sizing:border-box;margin:0;padding:0 2px;color:#000;font-family:Arial,Tahoma,sans-serif;font-size:${bodySize}px;font-weight:900;line-height:1.45;overflow-wrap:anywhere">
+      <header style="border-bottom:4px solid #000;padding:0 0 10px;margin:0 0 12px;text-align:center">
+        <div dir="rtl" style="display:flex;justify-content:flex-start;margin-bottom:4px"><span style="font-size:${titleSize}px;font-weight:900;line-height:1.2">زوع</span></div>
+        <div style="display:grid;grid-template-columns:1fr 1.1fr 1fr;gap:2px;align-items:center;direction:ltr;width:100%">
+          <div dir="rtl" style="text-align:center;font-size:${mastFont}px;font-weight:900;line-height:1.65;overflow-wrap:anywhere"><div>الجمهورية اليمنية</div><div>محافظة البيضاء</div><div>سوق الحوم المركزي</div></div>
+          <div dir="rtl" style="text-align:center;min-width:0"><img src="/mojam-logo.svg" alt="شعار مكتب معجم" style="display:block;width:${narrow ? 92 : 122}px;height:auto;max-width:100%;margin:0 auto"></div>
+          <div dir="ltr" style="text-align:center;font-family:Arial,sans-serif;font-size:${contactFont}px;font-weight:900;line-height:1.8;overflow-wrap:anywhere"><div>733436682</div><div>737980235</div><div>736014373</div><div>735429057</div></div>
+        </div>
+        <div style="font-size:${officeFont}px;font-weight:900;line-height:1.2;margin-top:5px">مكتب معجم</div>
+        <div style="font-size:${brandSize}px;font-weight:900;line-height:1.25">لتسويق الدواجن</div>
+      </header>
+      <section style="border:3px solid #000;padding:10px;margin-bottom:12px;font-size:${metaSize}px;font-weight:900;line-height:1.65"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>رقم الفاتورة</span><b dir="ltr" style="font-size:${numberSize}px;font-family:Arial,sans-serif">${esc(invoice.num || '')}</b></div><div>التاريخ: ${esc(invoice.date || '—')}</div><div>العميل: ${esc(invoice.customer || 'مبيعات نقداً')}</div><div>الهاتف: <span dir="ltr">${esc(invoice.phone || '—')}</span></div></section>
+      <table style="width:100%;table-layout:fixed;border-collapse:collapse;border:3px solid #000;text-align:center;font-size:${tableSize}px;font-weight:900"><colgroup><col style="width:23%"><col style="width:18%"><col style="width:18%"><col style="width:23%"><col style="width:18%"></colgroup><thead style="vertical-align:middle"><tr style="background:#e5e7eb"><th style="padding:${headingPadding}px 2px;border:2px solid #000;font-size:${headerSize}px;font-weight:900;line-height:1.2">الصنف</th><th style="padding:${headingPadding}px 1px;border:2px solid #000;font-size:${headerSize}px;font-weight:900;line-height:1.2">كمية</th><th style="padding:${headingPadding}px 1px;border:2px solid #000;font-size:${headerSize}px;font-weight:900;line-height:1.2">سعر</th><th style="padding:${headingPadding}px 1px;border:2px solid #000;font-size:${headerSize}px;font-weight:900;line-height:1.2">إجمالي</th><th style="padding:${headingPadding}px 1px;border:2px solid #000;font-size:${headerSize}px;font-weight:900;line-height:1.2">شبوك</th></tr></thead><tbody>${rows}</tbody></table>
+      <section style="text-align:center;border:3px solid #000;margin-top:12px;padding:10px;font-size:${metaSize}px;font-weight:900">المجموع الكلي<br><b dir="ltr" style="display:inline-block;font-size:${amountSize}px;font-family:Arial,sans-serif;font-weight:900">${fmt(invoice.total)} ريال</b><div style="margin-top:7px">الشبوك الفاضي: <b dir="ltr" style="font-size:${numberSize}px">${fmt(boxes)}</b></div></section>
+      <footer style="margin-top:14px;padding-top:10px;font-size:${signatureSize}px;font-weight:900;line-height:1.6">
+        <div style="text-align:center;font-size:${narrow ? 22 : 28}px;font-weight:900;margin:0 0 12px">شكراً لتعاملكم معنا</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;direction:ltr;text-align:center">
+          <div dir="rtl" style="border-top:2px solid #000;padding-top:5px;font-size:${signatureLabelFont}px">توقيع المستلم</div>
+          <div dir="rtl" style="border-top:2px solid #000;padding-top:5px;font-size:${signatureLabelFont}px">البائع<div style="font-size:${signatureValueFont}px;line-height:1.35">${esc(invoice.sellerName || 'غير مسجل')}</div></div>
+          <div dir="rtl" style="border-top:2px solid #000;padding-top:5px;font-size:${signatureLabelFont}px">الختم</div>
+        </div>
+        <div style="border-top:3px solid #000;margin-top:12px;padding-top:8px;text-align:center;font-size:${signatureLabelFont}px;font-weight:900">تنويه هام</div>
+        <div style="border-top:2px solid #000;margin-top:5px;padding-top:7px;font-size:${noteFont}px;font-weight:900;line-height:1.55;text-align:center">
+          <div>١- البضاعة لا ترد ولا تستبدل.</div>
+          <div style="margin-top:4px">٢- الزبون يتحمل مسؤولية ضياع أو إتلاف الشبوك.</div>
+          <div style="margin-top:4px">٣- الفاتورة صحيحة 100٪ إذا لم يردنا اعتراض عليها خلال 24 ساعة من تاريخ إصدارها ومراجعتها. شاكرين تعاونكم.</div>
+        </div>
+        <div style="border-bottom:3px solid #000;margin-top:8px"></div>
+      </footer>
+    </article>`;
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => {

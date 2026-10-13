@@ -54,8 +54,7 @@ function auth(required = true) {
       const token = header.startsWith('Bearer ') ? header.slice(7) : null;
       if (!token) { if (!required) return next(); return res.status(401).json({ success: false, error: 'AUTH_REQUIRED' }); }
       const payload = jwt.verify(token, JWT_SECRET);
-      const tokenHash = hashToken(token);
-      const session = await db.collection('user_sessions').findOne({ user_id: payload.sub, revoked_at: null, $or: [{ token_hash: tokenHash }, { background_access_hash: tokenHash }] });
+      const session = await db.collection('user_sessions').findOne({ token_hash: hashToken(token), user_id: payload.sub, revoked_at: null });
       const user = await db.collection('users').findOne({ id: payload.sub, account_id: ACCOUNT_ID });
       if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
       if (!session || !user || user.status !== 'active' || (user.expires_at && new Date(user.expires_at) < now())) return res.status(401).json({ success: false, error: 'SESSION_REVOKED' });
@@ -159,30 +158,9 @@ app.post('/api/auth/login', async (req, res) => {
   if (user && ['blocked','left_company','rejected'].includes(user.status)) return res.status(403).json({ success: false, error: 'USER_BLOCKED', fullName: user.full_name, message: `عزيزي ${user.full_name || 'المستخدم'}، لقد تم حظرك من قبل المدير. شكرًا لك.` });
   if (!user || !password || !(await bcrypt.compare(password, user.password_hash)) || user.status !== 'active') return res.status(401).json({ success: false, error: 'INVALID_LOGIN' });
   const token = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
-  const backgroundToken = crypto.randomBytes(32).toString('hex');
-  await db.collection('user_sessions').insertOne({ id: id(), user_id: user.id, account_id: ACCOUNT_ID, token_hash: hashToken(token), background_token_hash: hashToken(backgroundToken), background_expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), device_id: req.body.deviceId || null, created_at: now(), last_seen_at: now(), expires_at: new Date(Date.now() + 30 * 60 * 1000), revoked_at: null });
+  await db.collection('user_sessions').insertOne({ id: id(), user_id: user.id, account_id: ACCOUNT_ID, token_hash: hashToken(token), device_id: req.body.deviceId || null, created_at: now(), last_seen_at: now(), expires_at: new Date(Date.now() + 30 * 60 * 1000), revoked_at: null });
   await db.collection('users').updateOne({ id: user.id }, { $set: { last_login_at: now(), failed_login_count: 0 } });
-  res.json({ success: true, accessToken: token, backgroundToken, user: publicUser(user) });
-});
-app.post('/api/auth/background-token', auth(), async (req, res) => {
-  const currentToken = String(req.headers.authorization || '').slice(7);
-  const currentHash = hashToken(currentToken);
-  const session = await db.collection('user_sessions').findOne({ user_id: req.user.id, revoked_at: null, $or: [{ token_hash: currentHash }, { background_access_hash: currentHash }] });
-  if (!session) return res.status(401).json({ success: false, error: 'SESSION_REVOKED' });
-  const backgroundToken = crypto.randomBytes(32).toString('hex');
-  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_token_hash: hashToken(backgroundToken), background_expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000) } });
-  res.json({ success: true, backgroundToken });
-});
-app.post('/api/auth/background-refresh', async (req, res) => {
-  const backgroundToken = String(req.body?.backgroundToken || '');
-  if (!/^[a-f0-9]{64}$/.test(backgroundToken)) return res.status(401).json({ success: false, error: 'BACKGROUND_TOKEN_INVALID' });
-  const session = await db.collection('user_sessions').findOne({ background_token_hash: hashToken(backgroundToken), revoked_at: null, background_expires_at: { $gt: now() } });
-  if (!session) return res.status(401).json({ success: false, error: 'BACKGROUND_SESSION_EXPIRED' });
-  const user = await db.collection('users').findOne({ id: session.user_id, account_id: ACCOUNT_ID, status: 'active' });
-  if (!user) return res.status(403).json({ success: false, error: 'USER_BLOCKED' });
-  const accessToken = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
-  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_access_hash: hashToken(accessToken), background_access_expires_at: new Date(Date.now() + 30 * 60 * 1000), last_background_seen_at: now() } });
-  res.json({ success: true, accessToken });
+  res.json({ success: true, accessToken: token, user: publicUser(user) });
 });
 app.post('/api/auth/logout', auth(), async (req, res) => { const token = req.headers.authorization.slice(7); await db.collection('user_sessions').updateOne({ token_hash: hashToken(token) }, { $set: { revoked_at: now(), revoke_reason: 'logout' } }); res.json({ success: true }); });
 app.get('/api/auth/me', auth(), (req, res) => res.json({ success: true, user: publicUser(req.user) }));
@@ -302,7 +280,7 @@ app.post('/api/invoices/next-number', auth(), async (req, res) => {
 app.get('/api/automation', auth(), async (req, res) => {
   const stored = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
   const data = stored || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true };
-  const serverAutomationActive = Boolean(GEMINI_API_KEY && (stored?.autoGenerate ?? stored?.auto_generate));
+  const serverAutomationActive = Boolean(SMS_GATEWAY_TOKEN && GEMINI_API_KEY && (stored?.autoGenerate ?? stored?.auto_generate));
   res.json({ success: true, configured: Boolean(stored), gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive, data });
 });
 app.put('/api/automation', auth(), admin, async (req, res) => {
@@ -315,107 +293,7 @@ app.put('/api/automation', auth(), admin, async (req, res) => {
   if (nextAutoGenerate && (!previousAutoGenerate || !previous?.auto_generate_since)) data.auto_generate_since = now();
   await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true });
   const saved = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
-  res.json({ success: true, configured: true, gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive: Boolean(GEMINI_API_KEY && nextAutoGenerate), data: saved });
-});
-
-async function createNativeFallbackReply(inbound, settings, errorCode, customerName = 'العميل') {
-  const fallbackEnabled = (settings?.localFallback ?? settings?.local_fallback) !== false;
-  if (!fallbackEnabled) return null;
-  const safeName = String(customerName || 'العميل').replace(/[\r\n]+/g, ' ').slice(0, 80);
-  const fallbackText = `حياك الله ${safeName}، وصلت رسالتك وسنرد عليك قريبًا. مكتب معجم لتسويق الدواجن.`;
-  const shouldSend = Boolean(settings?.autoSend ?? settings?.auto_send);
-  const reply = {
-    id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized,
-    direction: 'outbound', body: fallbackText, message: fallbackText,
-    source: 'zoe-native-background', model: 'local-fallback', reply_to: inbound.external_key,
-    sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0,
-    created_at: now(), send_status: shouldSend ? 'queued' : 'draft',
-    fallback_reason: String(errorCode || 'GEMINI_FAILED').slice(0, 120)
-  };
-  await db.collection('conversation_messages').insertOne(reply);
-  await db.collection('sms_messages').updateOne(
-    { account_id: ACCOUNT_ID, external_key: inbound.external_key },
-    { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id, auto_reply_fallback: true, auto_reply_error: reply.fallback_reason } }
-  );
-  return { replyId: reply.id, queued: shouldSend, draft: !shouldSend };
-}
-
-// Android SMS_RECEIVED events are processed by the cloud; the Android app remains the SMS transport.
-app.post('/api/sms/native/inbound', auth(), async (req, res) => {
-  const phone = String(req.body?.phone || req.body?.address || '').trim();
-  const body = String(req.body?.body || '').trim().slice(0, 5000);
-  const date = Number(req.body?.timestamp) || Date.now();
-  if (!phone || !body) return res.status(400).json({ success: false, error: 'PHONE_AND_BODY_REQUIRED' });
-  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
-  if (!(settings?.autoGenerate ?? settings?.auto_generate)) return res.json({ success: true, generated: false, reason: 'AUTO_GENERATE_DISABLED' });
-  const stored = await storeSmsBatch([{ phone, body, date, direction: 'inbound' }], 'android-native-background');
-  if (!stored.insertedRows.length) return res.json({ success: true, duplicate: true, generated: false });
-  const inbound = stored.insertedRows[0];
-  const receivedAt = new Date(inbound.received_at || inbound.date || now());
-  const enabledAt = settings.auto_generate_since ? new Date(settings.auto_generate_since) : null;
-  if (enabledAt && receivedAt < enabledAt) return res.json({ success: true, generated: false, reason: 'BEFORE_AUTOMATION_ENABLED' });
-  if (settings.allowedContactsOnly ?? settings.allowed_contacts_only) {
-    const allowed = (Array.isArray(settings.allowedPhones ?? settings.allowed_phones) ? (settings.allowedPhones ?? settings.allowed_phones) : []).map(normPhone);
-    if (!allowed.includes(normPhone(inbound.phone_normalized))) return res.json({ success: true, generated: false, reason: 'CONTACT_NOT_ALLOWED' });
-  }
-  if (!GEMINI_API_KEY) {
-    const fallback = await createNativeFallbackReply(inbound, settings, 'AI_PROVIDER_NOT_CONFIGURED');
-    if (fallback) return res.json({ success: true, generated: false, fallback: true, ...fallback });
-    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: 'AI_PROVIDER_NOT_CONFIGURED' } });
-    return res.status(503).json({ success: false, error: 'AI_PROVIDER_NOT_CONFIGURED' });
-  }
-  let customerName = 'العميل';
-  try {
-    const context = await buildBusinessContext(db, ACCOUNT_ID, { phone: inbound.phone_normalized, message: inbound.body });
-    customerName = context.customerName || 'العميل';
-    const generated = await generateGeminiReply({
-      message: inbound.body,
-      name: customerName,
-      dialect: settings.dialect || 'yemeni_neutral',
-      responseFormat: settings.responseFormat || 'مختصر',
-      responseRules: settings.responseRules || '',
-      responseNumbers: Array.isArray(settings.responseNumbers) ? settings.responseNumbers : [],
-      trustedContext: context.text
-    }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
-    const shouldSend = Boolean(settings.autoSend ?? settings.auto_send);
-    const reply = { id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized, direction: 'outbound', body: generated.reply, message: generated.reply, source: 'zoe-native-background', model: generated.model, reply_to: inbound.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(), send_status: shouldSend ? 'queued' : 'draft' };
-    await db.collection('conversation_messages').insertOne(reply);
-    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id } });
-    return res.json({ success: true, generated: true, queued: shouldSend, draft: !shouldSend, replyId: reply.id });
-  } catch (error) {
-    const errorCode = error.code || 'AUTO_REPLY_FAILED';
-    console.error('[SMS NATIVE] automatic generation failed:', { code: errorCode });
-    const fallback = await createNativeFallbackReply(inbound, settings, errorCode, customerName);
-    if (fallback) return res.json({ success: true, generated: false, fallback: true, ...fallback });
-    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: errorCode } });
-    return res.status(502).json({ success: false, error: errorCode });
-  }
-});
-app.get('/api/sms/native/outbox/next', auth(), async (req, res) => {
-  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
-  if (!(settings?.autoGenerate ?? settings?.auto_generate) || !(settings?.autoSend ?? settings?.auto_send)) {
-    await db.collection('conversation_messages').updateMany(
-      { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
-      { $set: { send_status: 'draft', error_message: 'AUTO_SEND_DISABLED' } }
-    );
-    return res.json({ success: true, message: null });
-  }
-  const result = await db.collection('conversation_messages').findOneAndUpdate(
-    { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
-    { $set: { send_status: 'sending', claimed_at: now(), native_device_id: String(req.query.deviceId || 'android').slice(0, 100) } },
-    { sort: { created_at: 1 }, returnDocument: 'after' }
-  );
-  const message = result?.value || result || null;
-  res.json({ success: true, message });
-});
-app.post('/api/sms/native/outbox/:id/result', auth(), async (req, res) => {
-  const status = String(req.body?.status || '').toLowerCase();
-  if (!['submitted', 'failed'].includes(status)) return res.status(400).json({ success: false, error: 'INVALID_SEND_STATUS' });
-  const update = { send_status: status, gateway_result_at: now(), gateway_result: String(req.body?.detail || '').slice(0, 500) };
-  if (status === 'submitted') update.submitted_at = now();
-  else update.error_message = String(req.body?.error || 'SMS_SEND_FAILED').slice(0, 500);
-  const result = await db.collection('conversation_messages').updateOne({ account_id: ACCOUNT_ID, id: req.params.id, source: 'zoe-native-background', send_status: 'sending' }, { $set: update });
-  res.json({ success: true, updated: result.modifiedCount === 1 });
+  res.json({ success: true, configured: true, gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive: Boolean(SMS_GATEWAY_TOKEN && GEMINI_API_KEY && nextAutoGenerate), data: saved });
 });
 
 app.get('/api/sms/messages', auth(), async (req, res) => {
