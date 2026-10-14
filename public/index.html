@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>مكتب معجم — فواتير احترافية صف واحد</title>
-    
+
     <link href="https://fonts.googleapis.com/css2?family=Alexandria:wght@600;700;800;900&family=Cairo:wght@600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -176,7 +176,7 @@
         .edit-mode-banner { display:none; background:linear-gradient(90deg,#fef3c7,#fffbeb); color:#92400e; border:1px solid #fbbf24; }
         .edit-mode-banner.show { display:flex; }
         @media (max-width:640px) { .matrix-grid { grid-template-columns:1fr; } .batch-compact-grid { grid-template-columns:1fr; } header.main-header { padding:0 10px; } }
-    
+
         /* PDF: centered A4 sheet, readable Arabic, and no broken page fragments. */
         #pdf-render-zone{direction:rtl;text-align:right;}
         #pdf-render-zone .invoice-pdf-sheet,
@@ -738,6 +738,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
             </div>
         </div>
         <button id="mojam-admin-open" type="button" hidden aria-label="فتح إدارة العاملين والصلاحيات" class="mojam-admin-trigger">مكتب معجم</button>
+        <button id="mojam-logout" type="button" hidden aria-label="تسجيل الخروج من المتجر" style="flex:0 0 auto;border:1px solid #fecaca;border-radius:11px;padding:8px 12px;background:#fff1f2;color:#9f1239;font-family:inherit;font-size:11px;font-weight:900;cursor:pointer">تسجيل الخروج</button>
         <div id="header-action-zone" class="flex items-center gap-2"></div>
     </header>
 
@@ -782,7 +783,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
 
     <!-- ==================== الواجهة 2: الفواتير (جدول بحقل المتبقي التلقائي المباشر) ==================== -->
     <div id="view-invoices" class="app-view space-y-4">
-        
+
         <!-- شريط بورصة الأسعار السريعة -->
         <div class="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-3 shadow-sm">
             <div class="flex justify-between items-center mb-2">
@@ -966,7 +967,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
     <div id="view-expenses" class="app-view">
         <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
             <h3 class="font-black text-sm text-slate-900">تسجيل الخرج والمصاريف والتشغيل اليومي</h3>
-            
+
             <form onsubmit="saveExpense(event)" class="grid grid-cols-1 md:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
                 <div>
                     <label class="block font-bold text-slate-700 mb-1">بيان المصروف:</label>
@@ -1416,7 +1417,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                         <span class="text-red-700 font-bold flex items-center gap-1">                                        <i class="fa-solid fa-triangle-exclamation text-red-600"></i> إرسال SMS تلقائياً دون مراجعة (autoSend)
                         </span>
                         <input type="checkbox" id="drawerAutoSend" onchange="alertAutoSendCheck(this)" class="w-4 h-4 accent-red-600 rounded">
-                    </label>                                                                     
+                    </label>
                     <label class="flex items-center justify-between cursor-pointer">
                         <span class="text-slate-800 font-medium">استخدام الرد المحلي كاحتياطي (localFallback)</span>
                         <input type="checkbox" id="drawerLocalFallback" class="w-4 h-4 accent-red-600 rounded" checked>
@@ -1736,7 +1737,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
             const p = parseFloat(r.plus) || 0;
             const d = parseFloat(r.dead) || 0;
             r.net = Math.max(0, (b * c) + p - d);
-            
+
             const netInp = document.getElementById(`net-field-${idx}`);
             if(netInp) netInp.value = r.net;
 
@@ -1864,8 +1865,8 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                 const remInput = document.getElementById(`inv-rem-${cat}`);
                 if(remInput) {
                     remInput.value = finalRemaining + ' حبة';
-                    remInput.className = finalRemaining < 0 
-                        ? 'w-full p-1 text-center font-mono font-black text-rose-600 bg-transparent' 
+                    remInput.className = finalRemaining < 0
+                        ? 'w-full p-1 text-center font-mono font-black text-rose-600 bg-transparent'
                         : 'w-full p-1 text-center font-mono font-black text-amber-950 bg-transparent';
                 }
             });
@@ -2032,7 +2033,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                 msg += `▫️ *${i.name}*: ${i.qty} × ${i.price} = ${i.total} ريال\n`;
             });
             msg += `━━━━━━━━━━━━━━━\n📦 *الصناديق الفارغة: ${d.crates} صندوق*\n💰 *الإجمالي المستحق: ${d.total} ريال*\nشكراً لتعاملكم معنا ✨`;
-            
+
             const bridge = window.AndroidBridge || window.Android;
             if (bridge && bridge.sendToWhatsApp) {
                 bridge.sendToWhatsApp(d.phone, msg);
@@ -2359,7 +2360,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
 
         function previewBatchPDF() {
             if (batchInvoices.length === 0) return alert('لا توجد فواتير بالتكدس لتصديرها');
-            
+
             let totalMoney = 0;
             let totalCrates = 0;
             batchInvoices.forEach(i => {
@@ -3126,7 +3127,7 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
         function printSupplierReport(){const id=document.getElementById('supplier-report-card')?.value;if(id)printSupplierCard(id);else showToast('اختر كرت المورد أولاً');}
         const originalSyncSystem = syncSystem;
         syncSystem = function(){ originalSyncSystem(); incomingCards=readStoredJSON(`mojam_incoming_cards_${currentActiveDate}`, []); renderIncomingCards(); renderSupplierOptions(); renderSupplierReport(); updateInvoiceRemainingFields(); };
-    
+
 
         /* إصلاحات واجهة الإصدار النهائي */
         function openDailyStart() {
@@ -4244,7 +4245,7 @@ function buildSeparateThermalTemplate(inv){
         function mojamServerRequest(path, options={}) {
             if (!navigator.onLine) return Promise.reject(new Error('offline'));
             const headers = { 'Content-Type': 'application/json', [MOJAM_SERVER.accountHeader]: MOJAM_SERVER.accountId, ...(options.headers||{}) };
-            return fetch(MOJAM_SERVER.base + path, { ...options, headers })
+            return apiWithSession(path, { ...options, headers })
                 .then(async response => {
                     const body = response.status === 204 ? null : await response.json();
                     if (!response.ok || (body && body.success === false)) throw new Error(body?.message || `HTTP ${response.status}`);
@@ -4757,10 +4758,24 @@ function buildSeparateThermalTemplate(inv){
             });
         }
         async function apiWithSession(url, options = {}) {
-            const token = localStorage.getItem('mojam_access_token');
-            const headers = { ...(options.headers || {}) };
-            if (token) headers.Authorization = `Bearer ${token}`;
-            return api(url, { ...options, headers });
+            const tokenKey = 'mojam_access_token';
+            const send = token => {
+                const headers = { ...(options.headers || {}) };
+                if (token) headers.Authorization = `Bearer ${token}`;
+                else delete headers.Authorization;
+                return api(url, { ...options, headers });
+            };
+            let response = await send(localStorage.getItem(tokenKey));
+            if (response.status === 401 && typeof window.mojamRefreshAccessToken === 'function') {
+                try {
+                    const renewed = await window.mojamRefreshAccessToken();
+                    if (renewed) {
+                        localStorage.setItem(tokenKey, renewed);
+                        response = await send(renewed);
+                    }
+                } catch (error) { console.warn('تعذر تجديد جلسة الدخول تلقائياً:', error); }
+            }
+            return response;
         }
         function showSmsToast(msg, type = 'success') {
             const toast = document.getElementById('sms-toast');
@@ -4796,7 +4811,7 @@ function buildSeparateThermalTemplate(inv){
                 await fetchMongoCustomers();                                                                     await fetchAIModels();
                 await fetchAutomationSettings();
                 await fetchSMSMessages();
-                renderTrainingRulesUI();                                                         
+                renderTrainingRulesUI();
                 if (isManual) showSmsToast("تم تحديث كافة البيانات من السيرفر بنجاح.");                         } catch (err) {
                 console.error("خطأ أثناء جلب البيانات:", err);
             }
@@ -4822,7 +4837,7 @@ function buildSeparateThermalTemplate(inv){
 
         // 2. جلب عملاء MongoDB (GET /api/zoe)
         async function fetchMongoCustomers() {
-            try {                                                                                                const res = await api('/api/zoe');
+            try {                                                                                                const res = await apiWithSession('/api/zoe');
                 if (res.ok) {
                     const json = await res.json();
                     if (json.success && Array.isArray(json.data)) {                                                      liveCustomers = json.data;                                                                   }
@@ -4849,9 +4864,9 @@ function buildSeparateThermalTemplate(inv){
                 phone: phone,
                 google_maps_url: "",
                 total_delivered: delivered,                                                                      total_returned: returned
-            };                                                                                   
+            };
             try {
-                const res = await api('/api/zoe', {
+                const res = await apiWithSession('/api/zoe', {
                     method: 'POST',
                     body: JSON.stringify(payload)                                                                });
                 const result = await res.json();                                                                 if (result.success || res.ok) {
@@ -4882,7 +4897,7 @@ function buildSeparateThermalTemplate(inv){
                 }
             } catch (err) {
                 showSmsToast("فشل حذف العميل من السيرفر", "error");                                             }
-        }                                                                                        
+        }
         // 3. جلب نماذج Google AI Studio ومواءمتها مع «زوع»
         async function fetchAIModels() {
             const select = document.getElementById('aiModelSelect');
@@ -5206,7 +5221,7 @@ function buildSeparateThermalTemplate(inv){
         async function requestGenerateAIReply() {
             if (!selectedChatMessage) {                                                                          showSmsToast("اختر رسالة أولاً لتوليد رد عليها.", "warning");
                 return;
-            }                                                                                    
+            }
             const btn = document.getElementById('btnGenAI');                                                 const icon = document.getElementById('genAIIcon');
             const txt = document.getElementById('genAIText');
 
@@ -5216,7 +5231,7 @@ function buildSeparateThermalTemplate(inv){
             const phone = cleanPhone(selectedChatPhone);                                                     const name = selectedCustomerObj ? selectedCustomerObj.name : "العميل";
             const realModelId = document.getElementById('aiModelSelect').value || "gemini-3.5-flash-lite";                                                                                                    const dialect = document.getElementById('aiDialectSelect').value || "yemeni_neutral";
             const length = document.getElementById('aiLengthSelect').value || "مختصر";
-            const rules = document.getElementById('aiCustomRules').value || "";                              const reqNumbers = document.getElementById('aiRequiredNumbers').value.split(',').map(s => s.trim()).filter(Boolean);                                                                  
+            const rules = document.getElementById('aiCustomRules').value || "";                              const reqNumbers = document.getElementById('aiRequiredNumbers').value.split(',').map(s => s.trim()).filter(Boolean);
             const payload = {
                 phone: phone,
                 name: name,
@@ -5226,7 +5241,7 @@ function buildSeparateThermalTemplate(inv){
                 responseFormat: length,
                 responseRules: rules,
                 responseNumbers: reqNumbers
-            };                                                                                   
+            };
             try {
                 const res = await apiWithSession('/api/chat', { method: 'POST',
                     body: JSON.stringify(payload)
@@ -5280,9 +5295,9 @@ function buildSeparateThermalTemplate(inv){
             try {
                 const simSlotIndex = Number(document.getElementById('drawerSimSlot')?.value ?? liveAutomation.simSlotIndex ?? 0);
                 const data = await window.smsProvider.send(payload.phone, payload.message, simSlotIndex);
-                const res = { ok: data.success !== false };                                                   
+                const res = { ok: data.success !== false };
                 if (data.success || res.ok) {
-                    showSmsToast(`تمت جدولة إرسال SMS إلى (${payload.phone}). ستظهر النتيجة النهائية من شبكة الهاتف.`);                 
+                    showSmsToast(`تمت جدولة إرسال SMS إلى (${payload.phone}). ستظهر النتيجة النهائية من شبكة الهاتف.`);
                     if (!data?.archived) {
                         await apiWithSession('/api/conversations', {
                             method: 'POST',
@@ -5449,11 +5464,11 @@ function buildSeparateThermalTemplate(inv){
                 dot.className = "w-2 h-2 rounded-full bg-slate-400";
                 txt.innerText = "إطفاء";
             }
-        }                                                                                        
+        }
         function updateToggleSendButton(isActive) {
             const btn = document.getElementById('btnToggleSend');
             const dot = document.getElementById('dotToggleSend');
-            const txt = document.getElementById('txtToggleSend');                                
+            const txt = document.getElementById('txtToggleSend');
             if (isActive) {
                 btn.className = "flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border text-[10px] sm:text-[11px] font-bold transition bg-red-50 border-red-300 text-red-700 shadow-xs";
                 dot.className = "w-2 h-2 rounded-full bg-red-600 animate-ping";
@@ -5462,14 +5477,14 @@ function buildSeparateThermalTemplate(inv){
                 btn.className = "flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border text-[10px] sm:text-[11px] font-bold transition bg-slate-100 border-slate-300 text-slate-600 shadow-xs";
                 dot.className = "w-2 h-2 rounded-full bg-slate-400";
                 txt.innerText = "إطفاء";                                                                     }
-        }                                                                                        
+        }
         function alertAutoSendCheck(chk) {
             if (chk.checked) {
                 if (!confirm("⚠️ تنبيه أمني:\nتفعيل الإرسال التلقائي سيرسل رسائل SMS حقيقية للعملاء دون مراجعة!")) {
                     chk.checked = false;
                 }
             }
-        }                                                                                        
+        }
         function renderAllowedPhonesCheckboxes() {
             const container = document.getElementById('allowedPhonesCheckboxes');
             container.innerHTML = '';
@@ -5755,8 +5770,8 @@ function buildSeparateThermalTemplate(inv){
           <h2>مرحبًا بعودتك</h2><p class="panel-subtitle">سجّل الدخول ببيانات حسابك المعتمد للمتابعة.</p>
           <form id="mojam-login-form"><div class="mojam-auth-grid">
             <label>رمز الموظف (اختياري)<input name="employeeCode" type="text" autocomplete="username" placeholder="أدخل الرمز إن كان متوفرًا"></label>
-            <label>رقم الهاتف<input name="phone" type="tel" inputmode="tel" required autocomplete="tel" placeholder="رقم الهاتف المسجل"></label>
-            <label>اسم العامل<input name="fullName" type="text" required autocomplete="name" placeholder="الاسم المسجل لدى الإدارة"></label>
+            <label>رقم الهاتف<input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="رقم الهاتف المسجل"></label>
+            <label>اسم العامل<input name="fullName" type="text" autocomplete="name" placeholder="الاسم المسجل لدى الإدارة"></label>
             <label>كلمة المرور<input type="password" name="password" required autocomplete="current-password" placeholder="أدخل كلمة المرور"></label>
           </div><button type="submit" class="mojam-auth-action">دخول المتجر</button></form>
           <div class="mojam-auth-note">لا يمكن الدخول إلا للحسابات التي اعتمدتها الإدارة. هل أنت عامل جديد؟ اختر «تسجيل عامل».</div>
@@ -5803,10 +5818,34 @@ function buildSeparateThermalTemplate(inv){
   const requestStatus = document.getElementById('mojam-request-status');
   const apiBase = 'https://mojam-office.onrender.com';
   const tokenKey = 'mojam_access_token';
+  const logoutTrigger = document.getElementById('mojam-logout');
+  let nativeRefreshPromise = null;
   const saveNativeBackgroundToken = token => {
     if (window.AndroidBridge && typeof window.AndroidBridge.saveSmsBackgroundToken === 'function') {
       window.AndroidBridge.saveSmsBackgroundToken(token || '');
     }
+  };
+  window.mojamRefreshAccessToken = () => {
+    if (!window.AndroidBridge || typeof window.AndroidBridge.refreshAuthSession !== 'function') return Promise.reject(Object.assign(new Error('تحديث الجلسة يتطلب نسخة Android الجديدة.'), { code: 'NATIVE_REFRESH_UNAVAILABLE' }));
+    if (nativeRefreshPromise) return nativeRefreshPromise;
+    nativeRefreshPromise = new Promise((resolve, reject) => {
+      const callback = '__mojam_auth_refresh_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+      window[callback] = result => {
+        delete window[callback];
+        if (typeof result === 'string') { try { result = JSON.parse(result); } catch (_) {} }
+        const accessToken = String(result?.data || '').trim();
+        if (!result?.success || !accessToken) {
+          const error = new Error(result?.error || 'تعذر تجديد جلسة الدخول.');
+          error.code = result?.error || 'SESSION_REFRESH_FAILED';
+          reject(error);
+          return;
+        }
+        resolve(accessToken);
+      };
+      try { window.AndroidBridge.refreshAuthSession(callback); }
+      catch (error) { delete window[callback]; reject(error); }
+    }).finally(() => { nativeRefreshPromise = null; });
+    return nativeRefreshPromise;
   };
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
   let pendingCredentials = null;
@@ -5827,6 +5866,24 @@ function buildSeparateThermalTemplate(inv){
     loadUsers();
   };
   adminTrigger.addEventListener('click', openAdminModal);
+  if (logoutTrigger) logoutTrigger.addEventListener('click', async () => {
+    logoutTrigger.disabled = true;
+    try { await call('/api/auth/logout', { method: 'POST', body: '{}' }); }
+    catch (error) { console.warn('تعذر إبطال الجلسة على الخادم؛ سيتم مسحها من هذا الجهاز:', error); }
+    localStorage.removeItem(tokenKey);
+    localStorage.removeItem('mojam_current_user');
+    if (window.AndroidBridge && typeof window.AndroidBridge.clearAuthSession === 'function') window.AndroidBridge.clearAuthSession();
+    window.mojamCurrentUser = null;
+    try { clearInterval(refreshTimer); } catch (_) {}
+    adminTrigger.hidden = true;
+    logoutTrigger.hidden = true;
+    logoutTrigger.disabled = false;
+    closeAdminModal();
+    gate.style.display = 'flex';
+    const loginTab = document.getElementById('mojam-tab-login');
+    if (loginTab) loginTab.click();
+    say('تم تسجيل الخروج من المتجر.', true);
+  });
   document.getElementById('mojam-admin-close').addEventListener('click', closeAdminModal);
   adminModal.addEventListener('click', event => { if (event.target === adminModal) closeAdminModal(); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && adminModal.classList.contains('open')) closeAdminModal(); });
@@ -5835,6 +5892,9 @@ function buildSeparateThermalTemplate(inv){
     localStorage.removeItem(tokenKey);
     saveNativeBackgroundToken('');
     localStorage.removeItem('mojam_current_user');
+    if (window.AndroidBridge && typeof window.AndroidBridge.clearAuthSession === 'function') window.AndroidBridge.clearAuthSession();
+    if (logoutTrigger) logoutTrigger.hidden = true;
+    adminTrigger.hidden = true;
     gate.style.display = 'flex';
     gate.innerHTML = `<div style="width:min(520px,100%);background:#fff;border-radius:24px;padding:42px 25px;text-align:center;box-shadow:0 20px 70px #0002;direction:rtl;font-family:Arial,Tahoma,sans-serif"><div style="width:82px;height:82px;border-radius:50%;margin:0 auto 18px;background:#fff1f2;border:3px solid #e11d48;color:#be123c;display:flex;align-items:center;justify-content:center;font-size:42px;font-weight:900">!</div><div style="font-size:22px;color:#991b1b;font-weight:900;margin-bottom:10px">مكتب معجم</div><div style="font-size:17px;color:#1e293b;font-weight:900;margin-bottom:12px">عزيزي ${escapeHtml(name || 'المستخدم')}</div><div style="font-size:15px;color:#991b1b;font-weight:800;line-height:2">${escapeHtml(message || 'لقد تم حظرك من قبل المدير.')}</div><div style="font-size:12px;color:#64748b;margin-top:18px">شكرًا لك</div></div>`;
   };
@@ -5846,10 +5906,19 @@ function buildSeparateThermalTemplate(inv){
     msg.style.color = ok ? '#166534' : '#991b1b';
   };
   const call = async (path, opts = {}) => {
-    const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
-    const token = localStorage.getItem(tokenKey);
-    if (token) headers.Authorization = 'Bearer ' + token;
-    const response = await fetch(apiBase + path, { ...opts, headers });
+    const send = token => {
+      const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+      if (token) headers.Authorization = 'Bearer ' + token;
+      else delete headers.Authorization;
+      return fetch(apiBase + path, { ...opts, headers });
+    };
+    let response = await send(localStorage.getItem(tokenKey));
+    if (response.status === 401 && path !== '/api/auth/login' && typeof window.mojamRefreshAccessToken === 'function') {
+      try {
+        const renewed = await window.mojamRefreshAccessToken();
+        if (renewed) { localStorage.setItem(tokenKey, renewed); response = await send(renewed); }
+      } catch (error) { console.warn('تعذر تجديد الجلسة:', error); }
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.success === false) {
       const error = new Error(data.message || data.error || `تعذر تنفيذ الطلب (${response.status})`);
@@ -5870,7 +5939,7 @@ function buildSeparateThermalTemplate(inv){
   };
   const showAdminOrEnter = (data, message) => {
     const user = data.user || {};
-    const profile = { id: String(user.id || ''), name: String(user.name || user.full_name || user.fullName || user.employeeCode || '').trim(), employeeCode: String(user.employeeCode || user.employee_code || '') };
+    const profile = { id: String(user.id || ''), name: String(user.name || user.full_name || user.fullName || user.employeeCode || '').trim(), employeeCode: String(user.employeeCode || user.employee_code || ''), roles: Array.isArray(user.roles) ? user.roles : [], permissions: Array.isArray(user.permissions) ? user.permissions : [] };
     if (profile.name) {
       window.mojamCurrentUser = profile;
       localStorage.setItem('mojam_current_user', JSON.stringify(profile));
@@ -5878,11 +5947,13 @@ function buildSeparateThermalTemplate(inv){
     const isAdmin = (user.roles || []).some(role => ['admin', 'owner'].includes(role));
     gate.style.display = 'none';
     adminTrigger.hidden = !isAdmin;
+    if (logoutTrigger) logoutTrigger.hidden = false;
     closeAdminModal();
     if (message && typeof window.showToast === 'function') window.showToast(message);
     if (typeof window.ensureUniqueInvoiceNumber === 'function') window.ensureUniqueInvoiceNumber(undefined, true);
     if (typeof window.loadAllServerData === 'function') window.loadAllServerData();
     if (typeof window.startAutoRefreshTimer === 'function') window.startAutoRefreshTimer();
+    if (isAdmin && new URLSearchParams(location.search).get('admin') === '1') openAdminModal();
   };
   const schedulePoll = () => {
     if (!pendingCredentials) return;
@@ -5974,12 +6045,12 @@ function buildSeparateThermalTemplate(inv){
       box.innerHTML = (result.data || []).map(user => {
         const blocked = ['blocked', 'left_company'].includes(user.status);
         const pending = user.status === 'pending';
-        const approvalButton = pending ? `<button type="button" data-user-approve="${escapeHtml(user.id)}">اعتماد الطلب</button><button type="button" data-user-reject="${escapeHtml(user.id)}">رفض الطلب</button>` : `<button type="button" disabled>${user.status === 'active' ? 'معتمد' : user.status}</button>`;
+        const approvalButton = pending ? `<button type="button" data-user-approve="${escapeHtml(user.id)}">اعتماد وتحديد الصلاحيات</button><button type="button" data-user-reject="${escapeHtml(user.id)}">رفض الطلب</button>` : `<button type="button" disabled>${user.status === 'active' ? 'معتمد' : user.status}</button>`;
         return `<div class="mojam-admin-row"><span><b>${escapeHtml(user.full_name || user.employee_code)}</b><br>${escapeHtml(user.phone || '—')} · الحالة: ${escapeHtml(user.status)}<br>الدور: ${escapeHtml((user.roles || []).join(', ') || 'غير محدد')}</span><span>${approvalButton}<button type="button" data-user-access="${escapeHtml(user.id)}">الصلاحيات</button><button type="button" data-user-action="${blocked ? 'unblock' : 'block'}" data-user-id="${escapeHtml(user.id)}">${blocked ? 'رفع الحظر' : 'حظر'}</button></span></div>`;
       }).join('') || 'لا يوجد عاملون';
-      box.querySelectorAll('[data-user-approve]').forEach(button => button.onclick = async () => {
-        try { await call('/api/admin/users/' + button.dataset.userApprove + '/approve', { method: 'POST', body: '{}' }); say('تم اعتماد العامل. سيدخل تلقائيًا من صفحة الانتظار.', true); await loadUsers(); }
-        catch (error) { say(error.message); }
+      box.querySelectorAll('[data-user-approve]').forEach(button => button.onclick = () => {
+        const user = (result.data || []).find(item => item.id === button.dataset.userApprove);
+        showAccessEditor(user, true);
       });
       box.querySelectorAll('[data-user-reject]').forEach(button => button.onclick = async () => {
         try { await call('/api/admin/users/' + button.dataset.userReject + '/reject', { method: 'POST', body: JSON.stringify({ reason: 'تم رفض طلب الانضمام' }) }); say('تم رفض طلب العامل.', true); await loadUsers(); }
@@ -5993,40 +6064,113 @@ function buildSeparateThermalTemplate(inv){
     } catch (error) { say(error.message); }
   }
 
-  function showAccessEditor(user) {
+  function showAccessEditor(user, approvalMode = false) {
     if (!user) return;
     const box = document.getElementById('mojam-access-editor');
     const permissions = [['invoices.view','عرض الفواتير'],['invoices.create','إنشاء الفواتير'],['invoices.edit','تعديل الفواتير'],['shipments.view','عرض الشحنات'],['shipments.create','إضافة الشحنات'],['shipments.edit','تعديل الشحنات'],['customers.view','عرض العملاء'],['customers.edit','تعديل العملاء'],['sms.read','قراءة الرسائل'],['sms.generate_reply','توليد الردود'],['sms.send','إرسال SMS'],['reports.export','تصدير التقارير']];
     const current = user.permissions || [];
     box.style.display = 'block';
-    box.innerHTML = `<div class="mojam-access-box"><b>صلاحيات: ${escapeHtml(user.full_name || user.employee_code)}</b><select id="mojam-role-select"><option value="sales">مبيعات</option><option value="accountant">محاسب</option><option value="shipment_receiver">استقبال شحنات</option><option value="message_operator">مشرف رسائل</option><option value="report_viewer">مشاهد تقارير</option><option value="admin">مدير</option></select><div class="mojam-perms">${permissions.map(([value,label]) => `<label><input type="checkbox" value="${value}" ${current.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div><button id="mojam-save-access" class="mojam-auth-action">حفظ الصلاحيات</button><button id="mojam-close-access" class="mojam-auth-action" style="background:#64748b">إغلاق</button></div>`;
+    box.innerHTML = `<div class="mojam-access-box"><b>${approvalMode ? 'اعتماد العامل وتحديد صلاحياته' : 'صلاحيات'}: ${escapeHtml(user.full_name || user.employee_code)}</b><select id="mojam-role-select"><option value="sales">عامل مبيعات</option><option value="accountant">محاسب</option><option value="shipment_receiver">استقبال شحنات</option><option value="message_operator">مشرف رسائل</option><option value="report_viewer">مشاهد تقارير</option><option value="admin">مدير</option></select><p style="font-size:11px;color:#475569;line-height:1.7">اختيار الدور يحدد مجموعة بداية؛ مربعات الصلاحيات أدناه هي التي تسمح فعليًا بالعمليات، ويمكنك تعديلها قبل الحفظ.</p><div class="mojam-perms">${permissions.map(([value,label]) => `<label><input type="checkbox" value="${value}" ${current.includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}</div><button id="mojam-save-access" class="mojam-auth-action">${approvalMode ? 'اعتماد العامل وحفظ الصلاحيات' : 'حفظ الصلاحيات'}</button><button id="mojam-close-access" class="mojam-auth-action" style="background:#64748b">إغلاق</button></div>`;
     document.getElementById('mojam-role-select').value = (user.roles || ['sales'])[0];
+    document.getElementById('mojam-role-select').addEventListener('change', event => {
+      const all = permissions.map(([value]) => value);
+      const presets = {
+        sales: ['invoices.view','invoices.create','customers.view'],
+        accountant: ['invoices.view','invoices.create','invoices.edit','customers.view','reports.export'],
+        shipment_receiver: ['shipments.view','shipments.create','shipments.edit','customers.view'],
+        message_operator: ['customers.view','sms.read','sms.generate_reply','sms.send'],
+        report_viewer: ['invoices.view','shipments.view','customers.view','reports.export'],
+        admin: all
+      };
+      const selectedPreset = presets[event.target.value] || [];
+      box.querySelectorAll('.mojam-perms input').forEach(input => { input.checked = selectedPreset.includes(input.value); });
+    });
     document.getElementById('mojam-close-access').onclick = () => { box.style.display = 'none'; };
     document.getElementById('mojam-save-access').onclick = async () => {
       const selected = [...box.querySelectorAll('.mojam-perms input:checked')].map(input => input.value);
-      try { await call('/api/admin/users/' + user.id + '/access', { method: 'PUT', body: JSON.stringify({ role: document.getElementById('mojam-role-select').value, permissions: selected }) }); say('تم حفظ الدور والصلاحيات.', true); box.style.display = 'none'; loadUsers(); }
+      const role = document.getElementById('mojam-role-select').value;
+      if (approvalMode && !selected.length) { say('اختر صلاحية واحدة على الأقل قبل اعتماد العامل.', false); return; }
+      if (role === 'admin' && !window.confirm('هذا الاختيار يمنح المستخدم صلاحية إدارة كاملة. هل تريد المتابعة؟')) return;
+      const path = '/api/admin/users/' + user.id + (approvalMode ? '/approve' : '/access');
+      try { await call(path, { method: approvalMode ? 'POST' : 'PUT', body: JSON.stringify({ role, permissions: selected }) }); say(approvalMode ? 'تم اعتماد العامل وتعيين دوره وصلاحياته. سيدخل تلقائيًا.' : 'تم حفظ الدور والصلاحيات.', true); box.style.display = 'none'; loadUsers(); }
       catch (error) { say(error.message); }
     };
   }
 
   document.getElementById('mojam-refresh-users').onclick = loadUsers;
-  if (localStorage.getItem(tokenKey)) {
-    if (window.AndroidBridge && typeof window.AndroidBridge.saveSmsBackgroundToken === 'function') {
-      call('/api/auth/background-token', { method: 'POST', body: '{}' })
-        .then(result => saveNativeBackgroundToken(result.backgroundToken || ''))
-        .catch(error => console.warn('تعذر تجهيز جلسة SMS الخلفية:', error));
+  const hasNativeRefresh = window.AndroidBridge && typeof window.AndroidBridge.refreshAuthSession === 'function';
+  const setRestoringView = restoring => {
+    const tabs = [...document.querySelectorAll('[data-auth-tab]')];
+    const loginPanel = document.getElementById('mojam-auth-login');
+    const requestPanel = document.getElementById('mojam-auth-request');
+    tabs.forEach(tab => { tab.hidden = restoring; });
+    if (loginPanel) loginPanel.hidden = restoring;
+    if (requestPanel) requestPanel.hidden = restoring;
+    if (!restoring) {
+      const loginTab = document.querySelector('[data-auth-tab="login"]');
+      if (loginTab) loginTab.click();
     }
-    call('/api/auth/me').then(data => {
+  };
+  const restoreSession = async () => {
+    const hasAccess = Boolean(localStorage.getItem(tokenKey));
+    if (!hasAccess && !hasNativeRefresh) return;
+    gate.style.display = 'flex';
+    setRestoringView(true);
+    say('جارٍ استعادة جلسة الدخول المحفوظة والتحقق منها…', true);
+    try {
+      const data = await call('/api/auth/me');
       showAdminOrEnter(data, '');
-    }).catch(error => {
+    } catch (error) {
       adminTrigger.hidden = true;
+      if (logoutTrigger) logoutTrigger.hidden = true;
       closeAdminModal();
-      if (error.code === 'USER_BLOCKED') showBlocked(error.payload?.fullName, error.payload?.message);
-      else { localStorage.removeItem(tokenKey); localStorage.removeItem('mojam_current_user'); }
-    });
-  }
+      if (error.code === 'USER_BLOCKED') { showBlocked(error.payload?.fullName, error.payload?.message); return; }
+      if (['SESSION_REVOKED','INVALID_TOKEN','AUTH_REQUIRED','BACKGROUND_TOKEN_INVALID','BACKGROUND_SESSION_EXPIRED','USER_BLOCKED'].includes(error.code)) {
+        localStorage.removeItem(tokenKey);
+        localStorage.removeItem('mojam_current_user');
+        if (window.AndroidBridge && typeof window.AndroidBridge.clearAuthSession === 'function') window.AndroidBridge.clearAuthSession();
+      }
+      gate.style.display = 'flex';
+      setRestoringView(false);
+      say(error.code === 'SESSION_REVOKED' || error.code === 'BACKGROUND_SESSION_EXPIRED'
+        ? 'انتهت الجلسة أو ألغتها الإدارة. سجّل الدخول مرة أخرى.'
+        : 'تعذر استعادة الجلسة. تحقق من اتصال الإنترنت، أو سجّل الدخول إذا لزم الأمر.', false);
+    }
+  };
+  restoreSession();
 })();
 
+</script>
+
+<script id="mojam-sms-permission-guard">
+(function(){
+  const provider = window.smsProvider || {};
+  function allowed(permission) {
+    const user = window.mojamCurrentUser || {};
+    return (user.roles || []).some(role => role === 'admin' || role === 'owner') || (user.permissions || []).includes(permission);
+  }
+  async function verify(permission) {
+    if (window.AndroidBridge && typeof apiWithSession === 'function') {
+      const response = await apiWithSession('/api/auth/me');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.user) throw new Error(data.message || data.error || 'تعذر التحقق من صلاحية الحساب.');
+      const user = data.user;
+      window.mojamCurrentUser = { id: String(user.id || ''), name: user.name || user.full_name || '', employeeCode: user.employeeCode || user.employee_code || '', roles: user.roles || [], permissions: user.permissions || [] };
+      localStorage.setItem('mojam_current_user', JSON.stringify(window.mojamCurrentUser));
+    }
+    return allowed(permission);
+  }
+  function denied(permission) {
+    const error = new Error('لا تملك صلاحية ' + (permission === 'sms.send' ? 'إرسال الرسائل.' : 'قراءة الرسائل.'));
+    error.code = 'PERMISSION_REQUIRED';
+    if (typeof showSmsToast === 'function') showSmsToast(error.message, 'error');
+    return Promise.reject(error);
+  }
+  window.smsProvider = {
+    list: async function(){ if(!await verify('sms.read')) return denied('sms.read'); return provider.list.apply(provider, arguments); },
+    send: async function(){ if(!await verify('sms.send')) return denied('sms.send'); return provider.send.apply(provider, arguments); }
+  };
+})();
 </script>
 
 <!-- MOJAM_MAIN_INVOICE_EMPTY_CRATES_AND_THERMAL_CHECKOUT -->
@@ -6841,9 +6985,8 @@ function buildSeparateThermalTemplate(inv){
     if (input && !editing) input.value = 'جارٍ حجز رقم…';
 
     reservationPromise = (async () => {
-      const response = await fetch(apiBase + '/api/invoices/next-number', {
+      const response = await apiWithSession('/api/invoices/next-number', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
         body: '{}'
       });
       const result = await response.json().catch(() => ({}));

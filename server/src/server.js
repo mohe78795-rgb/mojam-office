@@ -66,6 +66,16 @@ function auth(required = true) {
   };
 }
 function admin(req, res, next) { if (!req.user || !(req.user.roles || []).some(r => ['admin','owner'].includes(r))) return res.status(403).json({ success: false, error: 'ADMIN_REQUIRED' }); next(); }
+function hasPermission(user, permission) {
+  if ((user?.roles || []).some(role => ['admin', 'owner'].includes(role))) return true;
+  return Array.isArray(user?.permissions) && user.permissions.includes(permission);
+}
+function requirePermission(permission) {
+  return (req, res, next) => {
+    if (hasPermission(req.user, permission)) return next();
+    return res.status(403).json({ success: false, error: 'PERMISSION_REQUIRED', permission, message: 'لا تملك الصلاحية اللازمة لهذا الإجراء.' });
+  };
+}
 function phoneGatewayAuth(req, res, next) {
   if (!SMS_GATEWAY_TOKEN) return res.status(503).json({ success: false, error: 'SMS_GATEWAY_NOT_CONFIGURED', message: 'أضف SMS_GATEWAY_TOKEN إلى متغيرات الخادم أولاً.' });
   const header = String(req.headers.authorization || '');
@@ -181,10 +191,18 @@ app.post('/api/auth/background-refresh', async (req, res) => {
   const user = await db.collection('users').findOne({ id: session.user_id, account_id: ACCOUNT_ID, status: 'active' });
   if (!user) return res.status(403).json({ success: false, error: 'USER_BLOCKED' });
   const accessToken = jwt.sign({ sub: user.id, accountId: ACCOUNT_ID, roles: user.roles || [] }, JWT_SECRET, { expiresIn: '30m' });
-  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_access_hash: hashToken(accessToken), background_access_expires_at: new Date(Date.now() + 30 * 60 * 1000), last_background_seen_at: now() } });
+  await db.collection('user_sessions').updateOne({ id: session.id, revoked_at: null }, { $set: { background_access_hash: hashToken(accessToken), background_access_expires_at: new Date(Date.now() + 30 * 60 * 1000), background_expires_at: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), last_background_seen_at: now() } });
   res.json({ success: true, accessToken });
 });
-app.post('/api/auth/logout', auth(), async (req, res) => { const token = req.headers.authorization.slice(7); await db.collection('user_sessions').updateOne({ token_hash: hashToken(token) }, { $set: { revoked_at: now(), revoke_reason: 'logout' } }); res.json({ success: true }); });
+app.post('/api/auth/logout', auth(), async (req, res) => {
+  const token = String(req.headers.authorization || '').slice(7);
+  const tokenHash = hashToken(token);
+  await db.collection('user_sessions').updateMany({
+    user_id: req.user.id, revoked_at: null,
+    $or: [{ token_hash: tokenHash }, { background_access_hash: tokenHash }]
+  }, { $set: { revoked_at: now(), revoke_reason: 'logout' } });
+  res.json({ success: true });
+});
 app.get('/api/auth/me', auth(), (req, res) => res.json({ success: true, user: publicUser(req.user) }));
 
 app.post('/api/auth/request-access', async (req, res) => {
@@ -249,12 +267,22 @@ app.post('/api/admin/users/:id/reject', auth(), admin, async (req, res) => {
   res.json({ success: true, message: 'تم رفض طلب المستخدم.' });
 });
 app.post('/api/admin/users/:id/approve', auth(), admin, async (req, res) => {
+  const user = await db.collection('users').findOne({ id: req.params.id, account_id: ACCOUNT_ID });
+  if (!user) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
+  if (user.status !== 'pending') return res.status(409).json({ success: false, error: 'USER_NOT_PENDING', message: 'لا يمكن اعتماد هذا الحساب لأنه ليس قيد الانتظار.' });
+  const allowedRoles = ['sales','accountant','shipment_receiver','message_operator','report_viewer','admin'];
+  const allowedPermissions = ['invoices.view','invoices.create','invoices.edit','shipments.view','shipments.create','shipments.edit','customers.view','customers.edit','sms.read','sms.generate_reply','sms.send','reports.export'];
+  const requestedRole = String(req.body?.role || '');
+  const role = allowedRoles.includes(requestedRole) ? requestedRole : (allowedRoles.find(item => (user.roles || []).includes(item)) || 'sales');
+  const permissions = Array.isArray(req.body?.permissions)
+    ? [...new Set(req.body.permissions.filter(item => allowedPermissions.includes(item)))]
+    : (Array.isArray(user.permissions) ? [...new Set(user.permissions.filter(item => allowedPermissions.includes(item)))] : ['invoices.view','invoices.create']);
   const approvedAt = now();
-  const result = await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', approved_by: req.user.id, approved_at: approvedAt, updated_at: approvedAt } });
+  const result = await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', roles: [role], permissions, approved_by: req.user.id, approved_at: approvedAt, updated_at: approvedAt, access_updated_by: req.user.id } });
   if (!result.matchedCount) return res.status(404).json({ success: false, error: 'USER_NOT_FOUND' });
   await db.collection('access_requests').updateMany({ user_id: req.params.id, account_id: ACCOUNT_ID, status: 'pending' }, { $set: { status: 'approved', approved_by: req.user.id, approved_at: approvedAt } });
-  await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.approved', entity_type: 'user', entity_id: req.params.id, created_at: approvedAt, created_by: req.user.id });
-  res.json({ success: true, status: 'approved' });
+  await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.approved', entity_type: 'user', entity_id: req.params.id, after_data: { role, permissions }, created_at: approvedAt, created_by: req.user.id });
+  res.json({ success: true, status: 'approved', role, permissions });
 });
 app.put('/api/admin/users/:id/access', auth(), admin, async (req, res) => {
   const allowedRoles = ['sales','accountant','shipment_receiver','message_operator','report_viewer','admin'];
@@ -276,8 +304,8 @@ app.post('/api/admin/users/:id/block', auth(), admin, async (req, res) => {
 app.post('/api/admin/users/:id/unblock', auth(), admin, async (req, res) => { await db.collection('users').updateOne({ id: req.params.id, account_id: ACCOUNT_ID }, { $set: { status: 'active', blocked_reason: null, updated_at: now() } }); await db.collection('audit_logs').insertOne({ id: id(), account_id: ACCOUNT_ID, action: 'user.unblocked', entity_type: 'user', entity_id: req.params.id, created_at: now(), created_by: req.user.id }); res.json({ success: true, message: 'تم رفع الحظر. يجب تسجيل الدخول من جديد.' }); });
 app.post('/api/admin/users/:id/revoke-sessions', auth(), admin, async (req, res) => { await db.collection('user_sessions').updateMany({ user_id: req.params.id, revoked_at: null }, { $set: { revoked_at: now(), revoke_reason: 'admin_revoke' } }); res.json({ success: true }); });
 
-app.get('/api/zoe', async (req, res) => res.json({ success: true, data: await db.collection('customers').find({ account_id: ACCOUNT_ID }).sort({ name: 1 }).limit(500).toArray() }));
-app.post('/api/zoe', async (req, res) => {
+app.get('/api/zoe', auth(), requirePermission('customers.view'), async (req, res) => res.json({ success: true, data: await db.collection('customers').find({ account_id: ACCOUNT_ID }).sort({ name: 1 }).limit(500).toArray() }));
+app.post('/api/zoe', auth(), requirePermission('customers.edit'), async (req, res) => {
   const name = String(req.body.name || '').trim(); const phone = String(req.body.phone || '').trim();
   if (!name || !phone) return res.status(400).json({ success: false, error: 'NAME_AND_PHONE_REQUIRED' });
   const doc = { id: id(), account_id: ACCOUNT_ID, name, phone, phone_normalized: normPhone(phone), total_delivered: Number(req.body.total_delivered || 0), total_returned: Number(req.body.total_returned || 0), updated_at: now(), created_at: now() };
@@ -290,7 +318,7 @@ app.get('/api/ai/models', (req, res) => {
   const models = [{ id: GEMINI_MODEL, name: knownNames[GEMINI_MODEL] || GEMINI_MODEL, provider: 'Google Gemini', active: true }];
   res.json({ success: true, models, data: models, defaultModel: GEMINI_MODEL, configured: Boolean(GEMINI_API_KEY) });
 });
-app.post('/api/invoices/next-number', auth(), async (req, res) => {
+app.post('/api/invoices/next-number', auth(), requirePermission('invoices.create'), async (req, res) => {
   try {
     const reservation = await reserveInvoiceNumber(db, ACCOUNT_ID, req.user, now());
     return res.json({ success: true, ...reservation });
@@ -299,7 +327,7 @@ app.post('/api/invoices/next-number', auth(), async (req, res) => {
     return res.status(503).json({ success: false, error: 'INVOICE_NUMBER_UNAVAILABLE', message: 'تعذر حجز رقم فاتورة فريد الآن. تحقق من الاتصال ثم أعد المحاولة.' });
   }
 });
-app.get('/api/automation', auth(), async (req, res) => {
+app.get('/api/automation', auth(), requirePermission('sms.read'), async (req, res) => {
   const stored = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
   const data = stored || { account_id: ACCOUNT_ID, auto_generate: false, auto_send: false, local_fallback: true };
   const serverAutomationActive = Boolean(GEMINI_API_KEY && (stored?.autoGenerate ?? stored?.auto_generate));
@@ -329,12 +357,12 @@ app.put('/api/automation', auth(), admin, async (req, res) => {
   res.json({ success: true, configured: true, gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive: Boolean(GEMINI_API_KEY && nextAutoGenerate), data: saved });
 });
 
-async function createNativeFallbackReply(inbound, settings, errorCode, customerName = 'العميل') {
+async function createNativeFallbackReply(inbound, settings, errorCode, customerName = 'العميل', canSend = false) {
   const fallbackEnabled = (settings?.localFallback ?? settings?.local_fallback) !== false;
   if (!fallbackEnabled) return null;
   const safeName = String(customerName || 'العميل').replace(/[\r\n]+/g, ' ').slice(0, 80);
   const fallbackText = `حياك الله ${safeName}، وصلت رسالتك وسنرد عليك قريبًا. مكتب معجم لتسويق الدواجن.`;
-  const shouldSend = Boolean(settings?.autoSend ?? settings?.auto_send);
+  const shouldSend = Boolean(settings?.autoSend ?? settings?.auto_send) && canSend;
   const reply = {
     id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized,
     direction: 'outbound', body: fallbackText, message: fallbackText,
@@ -351,12 +379,13 @@ async function createNativeFallbackReply(inbound, settings, errorCode, customerN
   );
   return {
     replyId: reply.id, queued: false, draft: !shouldSend,
+    reason: !canSend && Boolean(settings?.autoSend ?? settings?.auto_send) ? 'SMS_SEND_PERMISSION_REQUIRED' : null,
     dispatch: shouldSend ? { id: reply.id, phone_normalized: reply.phone_normalized, body: reply.body, sim_slot_index: reply.sim_slot_index } : null
   };
 }
 
 // Android SMS_RECEIVED events are processed by the cloud; the Android app remains the SMS transport.
-app.post('/api/sms/native/inbound', auth(), async (req, res) => {
+app.post('/api/sms/native/inbound', auth(), requirePermission('sms.generate_reply'), async (req, res) => {
   const phone = String(req.body?.phone || req.body?.address || '').trim();
   const body = String(req.body?.body || '').trim().slice(0, 5000);
   const date = Number(req.body?.timestamp) || Date.now();
@@ -390,7 +419,7 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
     }
   }
   if (!GEMINI_API_KEY) {
-    const fallback = await createNativeFallbackReply(inbound, settings, 'AI_PROVIDER_NOT_CONFIGURED');
+    const fallback = await createNativeFallbackReply(inbound, settings, 'AI_PROVIDER_NOT_CONFIGURED', 'العميل', hasPermission(req.user, 'sms.send'));
     if (fallback) return res.json({ success: true, generated: false, fallback: true, ...fallback });
     await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: 'AI_PROVIDER_NOT_CONFIGURED' } });
     return res.status(503).json({ success: false, error: 'AI_PROVIDER_NOT_CONFIGURED' });
@@ -408,11 +437,12 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
       responseNumbers: Array.isArray(settings.responseNumbers) ? settings.responseNumbers : [],
       trustedContext: context.text
     }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
-    const shouldSend = Boolean(settings.autoSend ?? settings.auto_send);
+    const canSend = hasPermission(req.user, 'sms.send');
+    const shouldSend = Boolean(settings.autoSend ?? settings.auto_send) && canSend;
     const reply = { id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized, direction: 'outbound', body: generated.reply, message: generated.reply, source: 'zoe-native-background', model: generated.model, reply_to: inbound.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(), send_status: shouldSend ? 'sending' : 'draft', claimed_at: shouldSend ? now() : null, native_device_id: shouldSend ? 'android-java-direct' : null };
     await db.collection('conversation_messages').insertOne(reply);
     await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id } });
-    return res.json({ success: true, generated: true, queued: false, draft: !shouldSend, replyId: reply.id, dispatch: shouldSend ? { id: reply.id, phone_normalized: reply.phone_normalized, body: reply.body, sim_slot_index: reply.sim_slot_index } : null });
+    return res.json({ success: true, generated: true, queued: false, draft: !shouldSend, reason: !canSend && Boolean(settings.autoSend ?? settings.auto_send) ? 'SMS_SEND_PERMISSION_REQUIRED' : null, replyId: reply.id, dispatch: shouldSend ? { id: reply.id, phone_normalized: reply.phone_normalized, body: reply.body, sim_slot_index: reply.sim_slot_index } : null });
   } catch (error) {
     const errorCode = error.code || 'AUTO_REPLY_FAILED';
     console.error('[SMS NATIVE] automatic generation failed:', { code: errorCode });
@@ -424,13 +454,13 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
         { $set: { send_status: 'draft', error_message: 'GEMINI_QUOTA_429', updated_at: now() } }
       );
     }
-    const fallback = await createNativeFallbackReply(inbound, settings, errorCode, customerName);
+    const fallback = await createNativeFallbackReply(inbound, settings, errorCode, customerName, hasPermission(req.user, 'sms.send'));
     if (fallback) return res.json({ success: true, generated: false, fallback: true, ...fallback });
     await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: errorCode } });
     return res.status(502).json({ success: false, error: errorCode });
   }
 });
-app.get('/api/sms/native/outbox/next', auth(), async (req, res) => {
+app.get('/api/sms/native/outbox/next', auth(), requirePermission('sms.send'), async (req, res) => {
   // Fail closed for older APKs: never drain a global queue into the handset.
   await db.collection('conversation_messages').updateMany(
     { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
@@ -438,7 +468,7 @@ app.get('/api/sms/native/outbox/next', auth(), async (req, res) => {
   );
   res.json({ success: true, message: null, error: 'LEGACY_GLOBAL_QUEUE_DISABLED' });
 });
-app.post('/api/sms/native/outbox/:id/result', auth(), async (req, res) => {
+app.post('/api/sms/native/outbox/:id/result', auth(), requirePermission('sms.send'), async (req, res) => {
   const status = String(req.body?.status || '').toLowerCase();
   if (!['submitted', 'failed'].includes(status)) return res.status(400).json({ success: false, error: 'INVALID_SEND_STATUS' });
   const update = { send_status: status, gateway_result_at: now(), gateway_result: String(req.body?.detail || '').slice(0, 500) };
@@ -448,12 +478,12 @@ app.post('/api/sms/native/outbox/:id/result', auth(), async (req, res) => {
   res.json({ success: true, updated: result.modifiedCount === 1 });
 });
 
-app.get('/api/sms/messages', auth(), async (req, res) => {
+app.get('/api/sms/messages', auth(), requirePermission('sms.read'), async (req, res) => {
   const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 1000));
   const messages = await db.collection('sms_messages').find({ account_id: ACCOUNT_ID }).sort({ received_at: -1 }).limit(limit).toArray();
   res.json({ success: true, messages, data: messages });
 });
-app.post('/api/sms/sync', auth(), async (req, res) => {
+app.post('/api/sms/sync', auth(), requirePermission('sms.read'), async (req, res) => {
   const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
   if (messages.length > 500) return res.status(413).json({ success: false, error: 'SMS_SYNC_BATCH_TOO_LARGE', message: 'أرسل الرسائل على دفعات لا تتجاوز 500 رسالة.' });
   const result = await storeSmsBatch(messages, 'android-app-sync');
@@ -499,7 +529,7 @@ app.post('/api/sms/gateway/outbox/:id/result', phoneGatewayAuth, async (req, res
   const result = await db.collection('conversation_messages').updateOne({ account_id: ACCOUNT_ID, id: req.params.id, send_status: 'sending' }, { $set: update });
   res.json({ success: true, updated: result.modifiedCount === 1 });
 });
-app.post('/api/sms/send', auth(), async (req, res) => {
+app.post('/api/sms/send', auth(), requirePermission('sms.send'), async (req, res) => {
   const phone = normPhone(req.body.phone); const message = String(req.body.message || '').trim().slice(0, 5000);
   if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
   if (!SMS_GATEWAY_TOKEN) return res.status(503).json({ success: false, error: 'SMS_GATEWAY_NOT_CONFIGURED', message: 'بوابة الهاتف غير متصلة. أضف SMS_GATEWAY_TOKEN وشغّل بوابة Termux.' });
@@ -507,7 +537,7 @@ app.post('/api/sms/send', auth(), async (req, res) => {
   await db.collection('conversation_messages').insertOne(row);
   res.status(202).json({ success: true, queued: true, archived: true, message: 'أُضيفت الرسالة إلى طابور هاتف SMS.', data: row });
 });
-app.get('/api/conversations/:phone', auth(), async (req, res) => {
+app.get('/api/conversations/:phone', auth(), requirePermission('sms.read'), async (req, res) => {
   const phone = normPhone(req.params.phone);
   const limit = Math.max(1, Math.min(Number(req.query.limit) || 1000, 5000));
   const [smsRows, conversationRows] = await Promise.all([
@@ -529,7 +559,7 @@ app.get('/api/conversations/:phone', auth(), async (req, res) => {
   const conversations = [...unique.values()].sort((a, b) => (new Date(a.created_at).getTime() || 0) - (new Date(b.created_at).getTime() || 0));
   res.json({ success: true, conversations, data: conversations });
 });
-app.post('/api/conversations', auth(), async (req, res) => {
+app.post('/api/conversations', auth(), requirePermission('sms.send'), async (req, res) => {
   const phone = normPhone(req.body.phone || req.body.phone_normalized);
   const message = String(req.body.message || req.body.body || '').trim().slice(0, 5000);
   if (!phone || !message) return res.status(400).json({ success: false, error: 'PHONE_AND_MESSAGE_REQUIRED' });
@@ -538,9 +568,9 @@ app.post('/api/conversations', auth(), async (req, res) => {
   res.status(201).json({ success: true, data: row });
 });
 
-app.get('/api/sync/day', async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
-app.put('/api/sync/day', async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
-app.post('/api/chat', auth(), async (req, res) => {
+app.get('/api/sync/day', auth(), requirePermission('invoices.view'), async (req, res) => { const row = await db.collection('daily_sessions').findOne({ account_id: ACCOUNT_ID, session_date: String(req.query.date) }); res.json({ success: true, data: row?.payload || {} }); });
+app.put('/api/sync/day', auth(), requirePermission('invoices.create'), async (req, res) => { const date = String(req.body.date || req.query.date || '').slice(0, 10); if (!date) return res.status(400).json({ success: false, error: 'DATE_REQUIRED' }); const row = { id: `${ACCOUNT_ID}_${date}`, account_id: ACCOUNT_ID, session_date: date, status: 'open', payload: req.body, updated_at: now() }; await db.collection('daily_sessions').updateOne({ id: row.id }, { $set: row, $setOnInsert: { created_at: now() } }, { upsert: true }); res.json({ success: true, data: row }); });
+app.post('/api/chat', auth(), requirePermission('sms.generate_reply'), async (req, res) => {
   const message = String(req.body.message || '').trim();
   if (!message) return res.status(400).json({ success: false, error: 'MESSAGE_REQUIRED', message: 'اكتب رسالة العميل أولاً.' });
   if (message.length > 5000) return res.status(413).json({ success: false, error: 'MESSAGE_TOO_LONG', message: 'الرسالة أطول من الحد المسموح به.' });
@@ -590,7 +620,7 @@ app.post('/api/chat', auth(), async (req, res) => {
   }
 });
 
-app.post('/api/orders/drafts', auth(), async (req, res) => {
+app.post('/api/orders/drafts', auth(), requirePermission('sms.generate_reply'), async (req, res) => {
   const phone = normPhone(req.body?.phone);
   const message = String(req.body?.message || '').trim().slice(0, 5000);
   const sourceMessageId = String(req.body?.sourceMessageId || '').trim().slice(0, 200);
@@ -653,7 +683,7 @@ app.post('/api/orders/drafts', auth(), async (req, res) => {
   }
 });
 
-app.get('/api/orders/drafts', auth(), async (req, res) => {
+app.get('/api/orders/drafts', auth(), requirePermission('sms.read'), async (req, res) => {
   const status = String(req.query.status || 'open');
   const openStatuses = ['draft', 'needs_clarification'];
   if (!['open', 'all', ...openStatuses].includes(status)) return res.status(400).json({ success: false, error: 'INVALID_DRAFT_STATUS' });
@@ -670,7 +700,7 @@ app.get('/api/admin/overview', auth(), admin, async (req, res) => {
   const counts = {}; for (const name of names) counts[name] = await db.collection(name).countDocuments({ account_id: ACCOUNT_ID });
   res.json({ success: true, accountId: ACCOUNT_ID, database: DB_NAME, counts, generatedAt: now() });
 });
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, '../../public/admin.html')));
+app.get('/admin', (req, res) => res.redirect('/?admin=1'));
 app.use(express.static(path.join(__dirname, '../../public')));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../../public/index.html')));
 
