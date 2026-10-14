@@ -4663,7 +4663,7 @@ function buildSeparateThermalTemplate(inv){
                 liveMessages.unshift(sms);
                 archiveSmsMessages([sms]).catch(error => console.warn("تعذر حفظ SMS الوارد في MongoDB", error));
                 if (typeof renderSMSListUI === "function") renderSMSListUI();
-                if (liveAutomation.autoGenerate && !serverSmsAutomationActive) autoGenerateForIncomingSms(sms);
+                if (liveAutomation.autoGenerate && !serverSmsAutomationActive && !hasAndroidBridge()) autoGenerateForIncomingSms(sms);
             }
         };
 
@@ -4965,7 +4965,7 @@ function buildSeparateThermalTemplate(inv){
                     const id = String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`);
                     return !previousIds.has(id) && smsMessageDirection(m) === 'inbound';
                 });
-                if (wasInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive) {
+                if (wasInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive && !hasAndroidBridge()) {
                     for (const msg of newMessages) await autoGenerateForIncomingSms(msg);
                 }
                 if (wasInitialized && selectedChatPhone && document.getElementById('chatWorkspace')?.classList.contains('sms-chat-open')) {

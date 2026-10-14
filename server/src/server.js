@@ -310,10 +310,21 @@ app.put('/api/automation', auth(), admin, async (req, res) => {
   const previous = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
   const data = { account_id: ACCOUNT_ID, updated_at: now() };
   for (const key of allowed) if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) data[key] = req.body[key];
+  if (typeof req.body?.autoSend === 'boolean') {
+    data.auto_send = req.body.autoSend;
+    if (req.body.autoSend) data.auto_send_pause_reason = null;
+  }
   const nextAutoGenerate = data.autoGenerate ?? previous?.autoGenerate ?? previous?.auto_generate ?? false;
+  const nextAutoSend = data.autoSend ?? previous?.autoSend ?? previous?.auto_send ?? false;
   const previousAutoGenerate = previous?.autoGenerate ?? previous?.auto_generate ?? false;
   if (nextAutoGenerate && (!previousAutoGenerate || !previous?.auto_generate_since)) data.auto_generate_since = now();
   await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: data }, { upsert: true });
+  if (!nextAutoSend) {
+    await db.collection('conversation_messages').updateMany(
+      { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+      { $set: { send_status: 'draft', error_message: 'AUTO_SEND_DISABLED', updated_at: now() } }
+    );
+  }
   const saved = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
   res.json({ success: true, configured: true, gatewayReady: Boolean(SMS_GATEWAY_TOKEN), serverAutomationActive: Boolean(GEMINI_API_KEY && nextAutoGenerate), data: saved });
 });
@@ -329,7 +340,8 @@ async function createNativeFallbackReply(inbound, settings, errorCode, customerN
     direction: 'outbound', body: fallbackText, message: fallbackText,
     source: 'zoe-native-background', model: 'local-fallback', reply_to: inbound.external_key,
     sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0,
-    created_at: now(), send_status: shouldSend ? 'queued' : 'draft',
+    created_at: now(), send_status: shouldSend ? 'sending' : 'draft',
+    claimed_at: shouldSend ? now() : null, native_device_id: shouldSend ? 'android-java-direct' : null,
     fallback_reason: String(errorCode || 'GEMINI_FAILED').slice(0, 120)
   };
   await db.collection('conversation_messages').insertOne(reply);
@@ -337,7 +349,10 @@ async function createNativeFallbackReply(inbound, settings, errorCode, customerN
     { account_id: ACCOUNT_ID, external_key: inbound.external_key },
     { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id, auto_reply_fallback: true, auto_reply_error: reply.fallback_reason } }
   );
-  return { replyId: reply.id, queued: shouldSend, draft: !shouldSend };
+  return {
+    replyId: reply.id, queued: false, draft: !shouldSend,
+    dispatch: shouldSend ? { id: reply.id, phone_normalized: reply.phone_normalized, body: reply.body, sim_slot_index: reply.sim_slot_index } : null
+  };
 }
 
 // Android SMS_RECEIVED events are processed by the cloud; the Android app remains the SMS transport.
@@ -346,17 +361,33 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
   const body = String(req.body?.body || '').trim().slice(0, 5000);
   const date = Number(req.body?.timestamp) || Date.now();
   if (!phone || !body) return res.status(400).json({ success: false, error: 'PHONE_AND_BODY_REQUIRED' });
-  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  const normalizedPhone = normPhone(phone);
+  if (!normalizedPhone) return res.status(400).json({ success: false, error: 'INVALID_PHONE' });
+  let settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
   if (!(settings?.autoGenerate ?? settings?.auto_generate)) return res.json({ success: true, generated: false, reason: 'AUTO_GENERATE_DISABLED' });
   const stored = await storeSmsBatch([{ phone, body, date, direction: 'inbound' }], 'android-native-background');
-  if (!stored.insertedRows.length) return res.json({ success: true, duplicate: true, generated: false });
-  const inbound = stored.insertedRows[0];
+  const externalKey = crypto.createHash('sha256').update(`${ACCOUNT_ID}\0${normalizedPhone}\0inbound\0${date}\0${body}`).digest('hex');
+  const existing = stored.insertedRows[0] || await db.collection('sms_messages').findOne({ account_id: ACCOUNT_ID, external_key: externalKey });
+  if (!existing) return res.json({ success: true, duplicate: true, generated: false });
+  const claimResult = await db.collection('sms_messages').findOneAndUpdate(
+    { account_id: ACCOUNT_ID, external_key: existing.external_key, auto_reply_status: null },
+    { $set: { auto_reply_status: 'processing', auto_reply_started_at: now(), auto_reply_source: 'android-native-background' } },
+    { returnDocument: 'after' }
+  );
+  const inbound = claimResult?.value || claimResult || null;
+  if (!inbound || inbound.auto_reply_status !== 'processing') return res.json({ success: true, duplicate: true, generated: false, reason: 'ALREADY_PROCESSED_OR_IN_PROGRESS' });
   const receivedAt = new Date(inbound.received_at || inbound.date || now());
   const enabledAt = settings.auto_generate_since ? new Date(settings.auto_generate_since) : null;
-  if (enabledAt && receivedAt < enabledAt) return res.json({ success: true, generated: false, reason: 'BEFORE_AUTOMATION_ENABLED' });
+  if (enabledAt && receivedAt < enabledAt) {
+    await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'skipped', auto_reply_error: 'BEFORE_AUTOMATION_ENABLED' } });
+    return res.json({ success: true, generated: false, reason: 'BEFORE_AUTOMATION_ENABLED' });
+  }
   if (settings.allowedContactsOnly ?? settings.allowed_contacts_only) {
     const allowed = (Array.isArray(settings.allowedPhones ?? settings.allowed_phones) ? (settings.allowedPhones ?? settings.allowed_phones) : []).map(normPhone);
-    if (!allowed.includes(normPhone(inbound.phone_normalized))) return res.json({ success: true, generated: false, reason: 'CONTACT_NOT_ALLOWED' });
+    if (!allowed.includes(normPhone(inbound.phone_normalized))) {
+      await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'skipped', auto_reply_error: 'CONTACT_NOT_ALLOWED' } });
+      return res.json({ success: true, generated: false, reason: 'CONTACT_NOT_ALLOWED' });
+    }
   }
   if (!GEMINI_API_KEY) {
     const fallback = await createNativeFallbackReply(inbound, settings, 'AI_PROVIDER_NOT_CONFIGURED');
@@ -378,13 +409,21 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
       trustedContext: context.text
     }, { apiKey: GEMINI_API_KEY, modelId: GEMINI_MODEL });
     const shouldSend = Boolean(settings.autoSend ?? settings.auto_send);
-    const reply = { id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized, direction: 'outbound', body: generated.reply, message: generated.reply, source: 'zoe-native-background', model: generated.model, reply_to: inbound.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(), send_status: shouldSend ? 'queued' : 'draft' };
+    const reply = { id: id(), account_id: ACCOUNT_ID, phone_normalized: inbound.phone_normalized, direction: 'outbound', body: generated.reply, message: generated.reply, source: 'zoe-native-background', model: generated.model, reply_to: inbound.external_key, sim_slot_index: Number(settings.simSlotIndex ?? settings.sim_slot_index) || 0, created_at: now(), send_status: shouldSend ? 'sending' : 'draft', claimed_at: shouldSend ? now() : null, native_device_id: shouldSend ? 'android-java-direct' : null };
     await db.collection('conversation_messages').insertOne(reply);
     await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: reply.send_status, auto_reply_id: reply.id } });
-    return res.json({ success: true, generated: true, queued: shouldSend, draft: !shouldSend, replyId: reply.id });
+    return res.json({ success: true, generated: true, queued: false, draft: !shouldSend, replyId: reply.id, dispatch: shouldSend ? { id: reply.id, phone_normalized: reply.phone_normalized, body: reply.body, sim_slot_index: reply.sim_slot_index } : null });
   } catch (error) {
     const errorCode = error.code || 'AUTO_REPLY_FAILED';
     console.error('[SMS NATIVE] automatic generation failed:', { code: errorCode });
+    if (Number(error.status) === 429) {
+      settings = { ...settings, autoSend: false, auto_send: false };
+      await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: { autoSend: false, auto_send: false, updated_at: now(), auto_send_pause_reason: 'GEMINI_QUOTA_429' } });
+      await db.collection('conversation_messages').updateMany(
+        { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+        { $set: { send_status: 'draft', error_message: 'GEMINI_QUOTA_429', updated_at: now() } }
+      );
+    }
     const fallback = await createNativeFallbackReply(inbound, settings, errorCode, customerName);
     if (fallback) return res.json({ success: true, generated: false, fallback: true, ...fallback });
     await db.collection('sms_messages').updateOne({ account_id: ACCOUNT_ID, external_key: inbound.external_key }, { $set: { auto_reply_status: 'error', auto_reply_error: errorCode } });
@@ -392,21 +431,12 @@ app.post('/api/sms/native/inbound', auth(), async (req, res) => {
   }
 });
 app.get('/api/sms/native/outbox/next', auth(), async (req, res) => {
-  const settings = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
-  if (!(settings?.autoGenerate ?? settings?.auto_generate) || !(settings?.autoSend ?? settings?.auto_send)) {
-    await db.collection('conversation_messages').updateMany(
-      { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
-      { $set: { send_status: 'draft', error_message: 'AUTO_SEND_DISABLED' } }
-    );
-    return res.json({ success: true, message: null });
-  }
-  const result = await db.collection('conversation_messages').findOneAndUpdate(
+  // Fail closed for older APKs: never drain a global queue into the handset.
+  await db.collection('conversation_messages').updateMany(
     { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
-    { $set: { send_status: 'sending', claimed_at: now(), native_device_id: String(req.query.deviceId || 'android').slice(0, 100) } },
-    { sort: { created_at: 1 }, returnDocument: 'after' }
+    { $set: { send_status: 'draft', error_message: 'LEGACY_GLOBAL_QUEUE_DISABLED', updated_at: now() } }
   );
-  const message = result?.value || result || null;
-  res.json({ success: true, message });
+  res.json({ success: true, message: null, error: 'LEGACY_GLOBAL_QUEUE_DISABLED' });
 });
 app.post('/api/sms/native/outbox/:id/result', auth(), async (req, res) => {
   const status = String(req.body?.status || '').toLowerCase();
@@ -541,6 +571,13 @@ app.post('/api/chat', auth(), async (req, res) => {
   } catch (error) {
     const providerStatus = Number(error.status) || 502;
     console.error('[AI] Gemini request failed:', { status: providerStatus, code: error.code || 'GEMINI_UPSTREAM_ERROR' });
+    if (providerStatus === 429) {
+      await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: { autoSend: false, auto_send: false, auto_send_pause_reason: 'GEMINI_QUOTA_429', updated_at: now() } });
+      await db.collection('conversation_messages').updateMany(
+        { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+        { $set: { send_status: 'draft', error_message: 'GEMINI_QUOTA_429', updated_at: now() } }
+      );
+    }
     let message = 'تعذر الاتصال بنموذج Gemini. حاول مرة أخرى لاحقًا.';
     if (providerStatus === 400) message = 'رفض Gemini صيغة الطلب. تحقق من الرسالة والإعدادات ثم أعد المحاولة.';
     else if (providerStatus === 401 || providerStatus === 403) message = 'مفتاح Gemini غير صالح أو غير مخوّل للمشروع. راجع GEMINI_API_KEY وقيود المفتاح في Google AI Studio.';
@@ -645,6 +682,17 @@ async function start() {
   await db.collection('conversation_messages').createIndex({ account_id: 1, phone_normalized: 1, created_at: 1 }, { name: 'conversation_history' });
   await db.collection('order_drafts').createIndex({ account_id: 1, source_key: 1 }, { unique: true, partialFilterExpression: { source_key: { $type: 'string' } }, name: 'order_draft_source_unique' });
   await db.collection('order_drafts').createIndex({ account_id: 1, status: 1, created_at: -1 }, { name: 'order_draft_review_queue' });
+  const automation = await db.collection('automation_settings').findOne({ account_id: ACCOUNT_ID });
+  if (automation && !automation.native_sms_queue_hotfix_applied_at) {
+    await db.collection('automation_settings').updateOne({ account_id: ACCOUNT_ID }, { $set: {
+      autoSend: false, auto_send: false, native_sms_queue_hotfix_applied_at: now(),
+      auto_send_pause_reason: 'NATIVE_SMS_QUEUE_SAFETY_HOTFIX', updated_at: now()
+    } });
+  }
+  await db.collection('conversation_messages').updateMany(
+    { account_id: ACCOUNT_ID, send_status: 'queued', source: 'zoe-native-background' },
+    { $set: { send_status: 'draft', error_message: 'NATIVE_QUEUE_HOTFIX_REVIEW_REQUIRED', updated_at: now() } }
+  );
   await ensureBaseData();
   app.listen(PORT, '0.0.0.0', () => console.log(`Mojam server listening on ${PORT}`));
 }
