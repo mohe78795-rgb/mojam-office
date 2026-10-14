@@ -1197,6 +1197,8 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
                     <button onclick="insertTemplate('debt')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-medium transition">💰 الحساب</button>
                     <button onclick="insertTemplate('prices')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-medium transition">🍗 أسعار اليوم</button>
                     <button onclick="insertTemplate('hours')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-medium transition">⏰ الدوام</button>
+                    <button id="btnAnalyzeOrder" onclick="analyzeCurrentOrderDraft()" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-bold transition">تحليل الطلب كمسودة</button>
+                    <button onclick="openOrderDrafts()" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 px-2.5 py-1 rounded-lg shrink-0 text-[11px] font-bold transition">مسودات الطلبات</button>
                 </div>
 
                 <!-- محرر نص الرد المربوط بـ Google AI Studio و model زوع -->
@@ -1236,6 +1238,15 @@ input:focus,select:focus,textarea:focus{border-color:#14b8a6!important;box-shado
     <!-- =========================================================================
          3. البطاقة التعريفية الشاملة للعميل من MongoDB (تفتح بزر ☰ في المحادثة)
     ========================================================================== -->
+    <div id="orderDraftsBackdrop" onclick="closeOrderDrafts()" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-[120] hidden"></div>
+    <section id="orderDraftsModal" class="fixed inset-x-3 top-1/2 -translate-y-1/2 mx-auto max-w-xl max-h-[82vh] overflow-hidden bg-white rounded-2xl shadow-2xl z-[121] hidden flex-col">
+        <header class="flex items-center justify-between p-4 border-b border-slate-200">
+            <div><h3 class="font-black text-slate-900">مسودات طلبات العملاء</h3><p class="text-[11px] text-slate-500 mt-1">للمراجعة فقط؛ لا يوجد حجز أو إرسال تلقائي.</p></div>
+            <button type="button" onclick="closeOrderDrafts()" class="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 font-bold" aria-label="إغلاق">×</button>
+        </header>
+        <div id="orderDraftsList" class="p-3 overflow-y-auto space-y-2"></div>
+    </section>
+
     <div id="customerModalBackdrop" onclick="closeCustomerDetailsModal()" class="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 hidden transition-opacity"></div>
 
     <div id="customerModal" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-md bg-white border border-slate-200 rounded-2xl z-50 hidden shadow-2xl p-4 space-y-3.5">
@@ -4942,23 +4953,36 @@ function buildSeparateThermalTemplate(inv){
 
         // 4. جلب رسائل SMS (GET /api/sms/messages)
         async function fetchSMSMessages() {
+            const wasInitialized = smsAutoInitialized;
             try {
                 const previousIds = new Set(liveMessages.map(m => String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`)));
                 const messages = await window.smsProvider.list(1000);
                 liveMessages = Array.isArray(messages) ? messages : [];
-                liveMessages.sort((a, b) => {
-                    return smsMessageTime(b) - smsMessageTime(a);
-                });
+                liveMessages.sort((a, b) => smsMessageTime(b) - smsMessageTime(a));
                 try { await archiveSmsMessages(liveMessages); }
                 catch (archiveError) { console.warn('تعذر مزامنة بعض الرسائل مع MongoDB:', archiveError); }
-                if (smsAutoInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive) {
-                    const newMessages = liveMessages.filter(m => {
-                        const id = String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`);
-                        return !previousIds.has(id) && smsMessageDirection(m) === 'inbound';
-                    });
-                    for (const msg of newMessages.reverse()) {
-                        await autoGenerateForIncomingSms(msg);
-                    }
+                const newMessages = liveMessages.filter(m => {
+                    const id = String(m._id || `${m.address || m.number || ""}-${m.date || m.body || ""}`);
+                    return !previousIds.has(id) && smsMessageDirection(m) === 'inbound';
+                });
+                if (wasInitialized && liveAutomation.autoGenerate && !serverSmsAutomationActive) {
+                    for (const msg of newMessages) await autoGenerateForIncomingSms(msg);
+                }
+                if (wasInitialized && selectedChatPhone && document.getElementById('chatWorkspace')?.classList.contains('sms-chat-open')) {
+                    const activePhoneKey = cleanPhone(selectedChatPhone);
+                    selectedChatMessages = liveMessages.filter(message =>
+                        cleanPhone(message.address || message.number || message.phone || message.phone_normalized) === activePhoneKey
+                    );
+                    const inboundThreadMessages = selectedChatMessages
+                        .filter(message => smsMessageDirection(message) === 'inbound')
+                        .sort((a, b) => smsMessageTime(a) - smsMessageTime(b));
+                    const latestInbound = inboundThreadMessages[inboundThreadMessages.length - 1] || null;
+                    if (latestInbound) selectedChatMessage = latestInbound;
+                    await loadRealConversationHistory(
+                        selectedChatPhone,
+                        latestInbound?.body || latestInbound?.message || '',
+                        true
+                    );
                 }
                 smsAutoInitialized = true;
             } catch (err) {
@@ -5047,9 +5071,10 @@ function buildSeparateThermalTemplate(inv){
             renderSMSListUI();
         }
 
-        async function loadRealConversationHistory(phone, latestBody) {
+        async function loadRealConversationHistory(phone, latestBody, keepCurrentVisible = false) {
             const feed = document.getElementById('chatFeed');
-            feed.innerHTML = '<div class="text-center py-6 text-slate-400 text-xs">جارٍ تحميل سجل المحادثة...</div>';
+            const requestedPhoneKey = cleanPhone(phone);
+            if (!keepCurrentVisible) feed.innerHTML = '<div class="text-center py-6 text-slate-400 text-xs">جارٍ تحميل سجل المحادثة...</div>';
             let serverRows = [];
             try {
                 const response = await apiWithSession(`/api/conversations/${encodeURIComponent(cleanPhone(phone))}?limit=5000`);
@@ -5058,10 +5083,10 @@ function buildSeparateThermalTemplate(inv){
             } catch (error) {
                 console.warn('تعذر جلب السجل السحابي؛ سيُعرض سجل الرسائل الموجود على الهاتف.', error);
             }
-            const phoneKey = cleanPhone(phone);
-            const deviceRows = (Array.isArray(selectedChatMessages) ? selectedChatMessages : liveMessages.filter(message =>
+            const phoneKey = requestedPhoneKey;
+            const deviceRows = liveMessages.filter(message =>
                 cleanPhone(message.address || message.number || message.phone || message.phone_normalized) === phoneKey
-            )).map(message => ({
+            ).map(message => ({
                 ...message,
                 body: message.body || message.message || '',
                 message: message.body || message.message || '',
@@ -5083,6 +5108,7 @@ function buildSeparateThermalTemplate(inv){
                 if (!unique.has(key)) unique.set(key, { ...row, body, direction, created_at: timestamp });
             }
             const conversation = [...unique.values()].sort((a, b) => smsMessageTime(a) - smsMessageTime(b));
+            if (cleanPhone(selectedChatPhone) !== requestedPhoneKey) return;
             feed.innerHTML = '';
             if (!conversation.length) {
                 feed.innerHTML = '<div class="flex flex-col items-center justify-center h-full text-slate-400 text-xs gap-2"><i class="fa-solid fa-comments text-2xl text-slate-300"></i><span>لا توجد رسائل محفوظة لهذه المحادثة بعد.</span></div>';
@@ -5099,7 +5125,7 @@ function buildSeparateThermalTemplate(inv){
                 bubble.style.borderRadius = isInbound ? '10px 10px 10px 2px' : '10px 10px 2px 10px';
                 bubble.textContent = item.body;
                 const time = document.createElement('time');
-                const sendLabel = item.send_status === 'queued' || item.send_status === 'sending' ? 'بانتظار الإرسال' : item.send_status === 'failed' ? 'فشل الإرسال' : item.send_status === 'draft' ? 'رد مقترح' : item.send_status === 'sent' ? 'تم الإرسال' : 'صادرة';
+                const sendLabel = item.send_status === 'queued' || item.send_status === 'sending' ? 'بانتظار الإرسال' : item.send_status === 'failed' ? 'فشل الإرسال' : item.send_status === 'draft' ? 'رد مقترح' : item.send_status === 'sent' ? 'تم الإرسال' : item.send_status === 'submitted' ? 'أُحيل إلى Android للإرسال' : 'صادرة';
                 time.textContent = `${formatTimestamp(item.created_at || item.received_at || item.date || item.createdAt)} · ${isInbound ? 'واردة' : sendLabel}`;
                 row.append(bubble, time);
                 feed.appendChild(row);
@@ -5148,11 +5174,30 @@ function buildSeparateThermalTemplate(inv){
                     }
                 }
                 showSmsToast(liveAutomation.autoSend
-                    ? (serverSmsAutomationActive ? `تم توليد الرد وإضافته إلى طابور هاتف SMS لإرساله إلى (${phone}).` : `تم توليد الرد وإرساله تلقائيًا إلى (${phone}).`)
+                    ? (serverSmsAutomationActive ? `يتولى الخادم توليد الرد، ويرسله تطبيق Android عبر الشريحة إلى (${phone}) حتى عند إغلاق الواجهة.` : `تم توليد الرد وإرساله تلقائيًا إلى (${phone}).`)
                     : `تم توليد رد تلقائي للرسالة من (${phone}).`);
             } catch (err) {
                 console.error("AUTO AI ERROR:", err);
-                if (liveAutomation.localFallback) applyLocalFallback(name, msg.body);
+                if (liveAutomation.localFallback) {
+                    applyLocalFallback(name, msg.body);
+                    if (liveAutomation.autoSend && !serverSmsAutomationActive) {
+                        const fallbackText = document.getElementById('replyText')?.value?.trim() || '';
+                        try {
+                            const sendResult = await window.smsProvider.send(phone, fallbackText, Number(liveAutomation.simSlotIndex || 0));
+                            if (!sendResult?.archived) {
+                                await apiWithSession('/api/conversations', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ phone, name, direction: 'outbound', message: fallbackText, model: 'local-fallback' })
+                                });
+                            }
+                            showSmsToast(`تعذر Gemini؛ تم إرسال الرد الاحتياطي تلقائياً إلى (${phone}).`, 'warning');
+                            return;
+                        } catch (sendError) {
+                            showSmsToast(`تعذر Gemini ولم يُرسل الرد الاحتياطي: ${sendError.message || sendError}`, 'error');
+                            return;
+                        }
+                    }
+                }
                 showSmsToast("فشل التوليد التلقائي: " + (err.message || err), "error");
             }
         }
@@ -5758,6 +5803,11 @@ function buildSeparateThermalTemplate(inv){
   const requestStatus = document.getElementById('mojam-request-status');
   const apiBase = 'https://mojam-office.onrender.com';
   const tokenKey = 'mojam_access_token';
+  const saveNativeBackgroundToken = token => {
+    if (window.AndroidBridge && typeof window.AndroidBridge.saveSmsBackgroundToken === 'function') {
+      window.AndroidBridge.saveSmsBackgroundToken(token || '');
+    }
+  };
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
   let pendingCredentials = null;
   let pollTimer = null;
@@ -5783,6 +5833,7 @@ function buildSeparateThermalTemplate(inv){
 
   const showBlocked = (name, message) => {
     localStorage.removeItem(tokenKey);
+    saveNativeBackgroundToken('');
     localStorage.removeItem('mojam_current_user');
     gate.style.display = 'flex';
     gate.innerHTML = `<div style="width:min(520px,100%);background:#fff;border-radius:24px;padding:42px 25px;text-align:center;box-shadow:0 20px 70px #0002;direction:rtl;font-family:Arial,Tahoma,sans-serif"><div style="width:82px;height:82px;border-radius:50%;margin:0 auto 18px;background:#fff1f2;border:3px solid #e11d48;color:#be123c;display:flex;align-items:center;justify-content:center;font-size:42px;font-weight:900">!</div><div style="font-size:22px;color:#991b1b;font-weight:900;margin-bottom:10px">مكتب معجم</div><div style="font-size:17px;color:#1e293b;font-weight:900;margin-bottom:12px">عزيزي ${escapeHtml(name || 'المستخدم')}</div><div style="font-size:15px;color:#991b1b;font-weight:800;line-height:2">${escapeHtml(message || 'لقد تم حظرك من قبل المدير.')}</div><div style="font-size:12px;color:#64748b;margin-top:18px">شكرًا لك</div></div>`;
@@ -5811,6 +5862,7 @@ function buildSeparateThermalTemplate(inv){
   const enterWithCredentials = async credentials => {
     const data = await call('/api/auth/login', { method: 'POST', body: JSON.stringify({ fullName: credentials.fullName, phone: credentials.phone, password: credentials.password }) });
     localStorage.setItem(tokenKey, data.accessToken);
+    saveNativeBackgroundToken(data.backgroundToken || '');
     pendingCredentials = null;
     if (pollTimer) clearTimeout(pollTimer);
     gate.style.display = 'none';
@@ -5881,6 +5933,7 @@ function buildSeparateThermalTemplate(inv){
     try {
       const data = await call('/api/auth/login', { method: 'POST', body: JSON.stringify(credentials) });
       localStorage.setItem(tokenKey, data.accessToken);
+    saveNativeBackgroundToken(data.backgroundToken || '');
       showAdminOrEnter(data, 'تم تسجيل الدخول بنجاح.');
     } catch (error) {
       if (error.code === 'USER_BLOCKED') showBlocked(error.payload?.fullName, error.payload?.message);
@@ -5958,6 +6011,11 @@ function buildSeparateThermalTemplate(inv){
 
   document.getElementById('mojam-refresh-users').onclick = loadUsers;
   if (localStorage.getItem(tokenKey)) {
+    if (window.AndroidBridge && typeof window.AndroidBridge.saveSmsBackgroundToken === 'function') {
+      call('/api/auth/background-token', { method: 'POST', body: '{}' })
+        .then(result => saveNativeBackgroundToken(result.backgroundToken || ''))
+        .catch(error => console.warn('تعذر تجهيز جلسة SMS الخلفية:', error));
+    }
     call('/api/auth/me').then(data => {
       showAdminOrEnter(data, '');
     }).catch(error => {
@@ -6817,5 +6875,6 @@ function buildSeparateThermalTemplate(inv){
   };
 })();
 </script>
+<script src="/order-drafts.js?v=1"></script>
 </body>
 </html>
